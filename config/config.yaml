@@ -19,7 +19,7 @@ server:
 training:
   batch_size: 64
   learning_rate: 0.001
-  local_epochs: 2
+  local_epochs: 20
   optimizer: "adam"
 
 aggregation:

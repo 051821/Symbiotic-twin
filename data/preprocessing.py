@@ -3,26 +3,10 @@ from sklearn.preprocessing import StandardScaler
 import os
 import sys
 
-# Allow imports from root directory
+# Allow root imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from config.loader import config_loader
-
-
-def create_label(row):
-    """
-    Create risk classification label:
-    0 -> Normal
-    1 -> Warning
-    2 -> Critical
-    """
-
-    if row["smoke"] > 0.8 or row["co"] > 0.7 or row["lpg"] > 0.7:
-        return 2  # Critical
-    elif row["humidity"] > 75 or row["temp"] > 90:
-        return 1  # Warning
-    else:
-        return 0  # Normal
 
 
 def preprocess_data():
@@ -30,7 +14,6 @@ def preprocess_data():
 
     raw_data_path = config_loader.get("data", "raw_data_path")
     processed_data_path = config_loader.get("data", "processed_data_path")
-    feature_columns = config_loader.get("data", "feature_columns")
 
     if not os.path.exists(raw_data_path):
         raise FileNotFoundError(f"Raw dataset not found at {raw_data_path}")
@@ -41,21 +24,42 @@ def preprocess_data():
     print(f"Dataset shape: {df.shape}")
 
     # Convert timestamp
-    print("Converting timestamp...")
     df["ts"] = pd.to_datetime(df["ts"], unit="s")
 
-    # Create label
-    print("Creating classification labels...")
-    df["label"] = df.apply(create_label, axis=1)
+    # Convert booleans to int
+    df["light"] = df["light"].astype(int)
+    df["motion"] = df["motion"].astype(int)
 
-    # Convert boolean columns
-    if "light" in df.columns:
-        df["light"] = df["light"].astype(int)
+    # -----------------------------
+    # Step 1: Create Risk Score
+    # -----------------------------
+    print("Creating risk score...")
 
-    if "motion" in df.columns:
-        df["motion"] = df["motion"].astype(int)
+    df["risk_score"] = (
+        0.3 * df["smoke"] +
+        0.3 * df["co"] +
+        0.2 * df["lpg"] +
+        0.1 * df["humidity"] +
+        0.1 * df["temp"]
+    )
 
-    # Normalize continuous features
+    # -----------------------------
+    # Step 2: Convert Risk Score to 3 Balanced Classes
+    # -----------------------------
+    print("Generating balanced 3-class labels using quantiles...")
+
+    df["label"] = pd.qcut(
+        df["risk_score"],
+        q=3,
+        labels=[0, 1, 2]
+    ).astype(int)
+
+    # Drop risk score (not needed for training)
+    df.drop(columns=["risk_score"], inplace=True)
+
+    # -----------------------------
+    # Step 3: Normalize Continuous Features
+    # -----------------------------
     continuous_features = ["co", "humidity", "lpg", "smoke", "temp"]
 
     print("Normalizing continuous features...")
@@ -67,8 +71,10 @@ def preprocess_data():
     df.to_csv(processed_data_path, index=False)
 
     print("Preprocessing completed successfully.")
-    print(f"Processed dataset saved at: {processed_data_path}")
+    print("Label distribution:")
+    print(df["label"].value_counts(normalize=True))
 
 
 if __name__ == "__main__":
     preprocess_data()
+
