@@ -1,0 +1,59 @@
+# ==============================
+# SYMBIOTIC-TWIN Configuration
+# ==============================
+
+system:
+  project_name: "SYMBIOTIC-TWIN"
+  num_edges: 3
+  num_rounds: 10
+  device_ids:
+    - "device_1"
+    - "device_2"
+    - "device_3"
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+  url: "http://server:8000"
+
+training:
+  batch_size: 64
+  learning_rate: 0.001
+  local_epochs: 2
+  optimizer: "adam"
+
+aggregation:
+  method: "fedavg"
+  adaptive_weighting: true
+  reputation_enabled: true
+
+metrics:
+  track_accuracy: true
+  track_latency: true
+  track_energy: true
+
+data:
+  raw_data_path: "data/iot_telemetry_data.csv"
+  processed_data_path: "data/processed_dataset.csv"
+  label_column: "label"
+  feature_columns:
+    - "co"
+    - "humidity"
+    - "light"
+    - "lpg"
+    - "motion"
+    - "smoke"
+    - "temp"
+
+logging:
+  level: "INFO"
+  log_dir: "logs"
+  format: "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+
+dashboard:
+  refresh_interval: 5
+  enable_live_updates: true
+
+security:
+  enable_differential_privacy: false
+  enable_encryption: false
