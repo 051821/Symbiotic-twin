@@ -6,23 +6,29 @@ system:
   epochs_per_round: 5
   seed: 42
 
+
+# IMPORTANT: Use docker-compose service name, NOT 0.0.0.0
 server:
-  host: "0.0.0.0"
+  host: "symbiotic-server"
   port: 8000
+
 
 edges:
   - id: "edge1"
     device: "b8:27:eb:bf:9d:51"
-    host: "0.0.0.0"
+    host: "symbiotic-edge1"
     port: 8001
+
   - id: "edge2"
     device: "00:0f:00:70:91:0a"
-    host: "0.0.0.0"
+    host: "symbiotic-edge2"
     port: 8002
+
   - id: "edge3"
     device: "1c:bf:ce:15:ec:4d"
-    host: "0.0.0.0"
+    host: "symbiotic-edge3"
     port: 8003
+
 
 model:
   input_size: 7
@@ -30,24 +36,28 @@ model:
   num_classes: 3
   dropout: 0.3
 
+
 aggregation:
-  strategy: "fedavg"           # fedavg | adaptive
+  strategy: "fedavg"            # fedavg | adaptive
   adaptive_weighting: true
   reputation_enabled: true
   min_reputation: 0.1
 
+
 data:
-  raw_path: "data/iot_telemetry_data.csv"
-  processed_path: "data/processed/"
-  partitions_path: "data/partitions/"
+  raw_path: "/app/data/iot_telemetry_data.csv"
+  processed_path: "/app/data/processed/"
+  partitions_path: "/app/data/partitions/"
   test_split: 0.2
+
 
 logging:
   level: "INFO"
-  log_dir: "logs/"
+  log_dir: "/app/logs/"
   format: "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
   date_format: "%Y-%m-%d %H:%M:%S"
 
+
 dashboard:
   refresh_interval: 3
-  metrics_path: "logs/metrics.json"
+  metrics_path: "/app/logs/metrics.json"
