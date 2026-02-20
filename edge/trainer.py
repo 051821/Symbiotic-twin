@@ -1,92 +1,97 @@
+"""
+edge/trainer.py
+Handles local model training and evaluation on edge nodes.
+"""
+
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader
+from typing import Tuple
 
-import sys
-import os
+from config.loader import get_config
+from config.logging_config import setup_logger
+from metrics.accuracy import compute_batch_accuracy
+from metrics.latency import LatencyTimer
+from metrics.energy import EnergyMonitor
 
-# Allow import from project root
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from shared.model import initialize_model
-from shared.utils import get_device
-from config.loader import config_loader
+logger = setup_logger("trainer")
 
 
-class EdgeTrainer:
-    def __init__(self, device_id):
-        self.device_id = device_id
-        self.device = get_device()
+class LocalTrainer:
+    """Trains a model on a local edge dataset for one federated round."""
 
-        self.learning_rate = config_loader.get("training", "learning_rate")
-        self.batch_size = config_loader.get("training", "batch_size")
-        self.local_epochs = config_loader.get("training", "local_epochs")
+    def __init__(self, model: nn.Module, edge_id: str):
+        cfg = get_config()
+        self.edge_id    = edge_id
+        self.model      = model
+        self.epochs     = cfg["system"]["epochs_per_round"]
+        self.lr         = cfg["system"]["learning_rate"]
+        self.device     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.model = initialize_model(self.device)
-        self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        self.model.to(self.device)
+        self.criterion  = nn.CrossEntropyLoss()
+        self.optimizer  = torch.optim.Adam(self.model.parameters(), lr=self.lr)
 
-    def load_data(self, X_train, y_train, X_test, y_test):
-        self.train_loader = DataLoader(
-            TensorDataset(X_train, y_train),
-            batch_size=self.batch_size,
-            shuffle=True
-        )
+    def train(self, train_loader: DataLoader) -> Tuple[float, float, float]:
+        """
+        Train the model for configured number of epochs.
 
-        self.test_loader = DataLoader(
-            TensorDataset(X_test, y_test),
-            batch_size=self.batch_size,
-            shuffle=False
-        )
-
-    def train(self):
+        Returns:
+            (accuracy_%, latency_ms, energy_j)
+        """
         self.model.train()
+        total_correct, total_samples = 0, 0
 
-        for epoch in range(self.local_epochs):
-            total_loss = 0
+        with EnergyMonitor(self.model) as energy:
+            with LatencyTimer() as timer:
+                for epoch in range(self.epochs):
+                    epoch_correct, epoch_total = 0, 0
 
-            for X_batch, y_batch in self.train_loader:
-                X_batch = X_batch.to(self.device)
-                y_batch = y_batch.to(self.device)
+                    for X_batch, y_batch in train_loader:
+                        X_batch = X_batch.to(self.device)
+                        y_batch = y_batch.to(self.device)
 
-                self.optimizer.zero_grad()
+                        self.optimizer.zero_grad()
+                        outputs = self.model(X_batch)
+                        loss    = self.criterion(outputs, y_batch)
+                        loss.backward()
+                        self.optimizer.step()
 
-                outputs = self.model(X_batch)
-                loss = self.criterion(outputs, y_batch)
+                        c, t = compute_batch_accuracy(outputs, y_batch)
+                        epoch_correct += c
+                        epoch_total   += t
 
-                loss.backward()
-                self.optimizer.step()
+                    epoch_acc = epoch_correct / epoch_total * 100 if epoch_total else 0
+                    logger.info(
+                        f"[{self.edge_id}] Epoch {epoch + 1}/{self.epochs} "
+                        f"| Accuracy: {epoch_acc:.2f}%"
+                    )
+                    total_correct = epoch_correct
+                    total_samples = epoch_total
 
-                total_loss += loss.item()
+        accuracy   = total_correct / total_samples * 100 if total_samples else 0
+        latency_ms = timer.elapsed_ms
+        energy_j   = energy.energy_j
 
-            avg_loss = total_loss / len(self.train_loader)
-            print(f"[{self.device_id}] Epoch {epoch+1} - Loss: {avg_loss:.4f}")
+        logger.info(
+            f"[{self.edge_id}] Training complete "
+            f"| Accuracy={accuracy:.2f}% | Latency={latency_ms:.1f}ms | Energy={energy_j:.4f}J"
+        )
+        return accuracy, latency_ms, energy_j
 
-    def evaluate(self):
+    def evaluate(self, test_loader: DataLoader) -> float:
+        """Evaluate model on test set. Returns accuracy %."""
         self.model.eval()
-
-        correct = 0
-        total = 0
-
+        correct, total = 0, 0
         with torch.no_grad():
-            for X_batch, y_batch in self.test_loader:
+            for X_batch, y_batch in test_loader:
                 X_batch = X_batch.to(self.device)
                 y_batch = y_batch.to(self.device)
-
                 outputs = self.model(X_batch)
-                _, predicted = torch.max(outputs, 1)
+                c, t    = compute_batch_accuracy(outputs, y_batch)
+                correct += c
+                total   += t
 
-                total += y_batch.size(0)
-                correct += (predicted == y_batch).sum().item()
-
-        accuracy = 100 * correct / total
-        print(f"[{self.device_id}] Accuracy: {accuracy:.2f}%")
-
-        return accuracy
-
-    def get_weights(self):
-        return self.model.state_dict()
-
-    def set_weights(self, weights):
-        self.model.load_state_dict(weights)
+        acc = correct / total * 100 if total else 0
+        logger.info(f"[{self.edge_id}] Test Accuracy: {acc:.2f}%")
+        return acc
