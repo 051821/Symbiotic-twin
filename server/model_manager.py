@@ -70,6 +70,6 @@ class ModelManager:
             logger.error(f"Checkpoint not found: {path}")
             return False
 
-        self.model.load_state_dict(torch.load(path, map_location="cpu"))
+        self.model.load_state_dict(torch.load(path, map_location="cpu", weights_only=False))
         logger.info(f"Checkpoint loaded: {path}")
         return True

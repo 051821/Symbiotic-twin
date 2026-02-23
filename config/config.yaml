@@ -7,26 +7,28 @@ system:
   seed: 42
 
 
-# IMPORTANT: Use docker-compose service name, NOT 0.0.0.0
+# IMPORTANT: Use localhost for local testing, Docker service names for Docker
 server:
-  host: "symbiotic-server"
+  # When running under Docker Compose, use the service name 'server'
+  # so edge containers can resolve and connect to the server over the bridge network.
+  host: "server"
   port: 8000
 
 
 edges:
   - id: "edge1"
     device: "b8:27:eb:bf:9d:51"
-    host: "symbiotic-edge1"
+    host: "127.0.0.1"
     port: 8001
 
   - id: "edge2"
     device: "00:0f:00:70:91:0a"
-    host: "symbiotic-edge2"
+    host: "127.0.0.1"
     port: 8002
 
   - id: "edge3"
     device: "1c:bf:ce:15:ec:4d"
-    host: "symbiotic-edge3"
+    host: "127.0.0.1"
     port: 8003
 
 
@@ -45,19 +47,19 @@ aggregation:
 
 
 data:
-  raw_path: "/app/data/iot_telemetry_data.csv"
-  processed_path: "/app/data/processed/"
-  partitions_path: "/app/data/partitions/"
+  raw_path: "data/iot_telemetry_data.csv"
+  processed_path: "data/processed/"
+  partitions_path: "data/partitions/"
   test_split: 0.2
 
 
 logging:
   level: "INFO"
-  log_dir: "/app/logs/"
+  log_dir: "logs/"
   format: "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
   date_format: "%Y-%m-%d %H:%M:%S"
 
 
 dashboard:
   refresh_interval: 3
-  metrics_path: "/app/logs/metrics.json"
+  metrics_path: "logs/metrics.json"

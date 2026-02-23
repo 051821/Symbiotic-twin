@@ -1,13 +1,10 @@
-version: "3.9"
-
 services:
 
   server:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.server
     container_name: symbiotic-server
-    command: python -m server.main
     ports:
       - "8000:8000"
     volumes:
@@ -15,21 +12,24 @@ services:
       - ./data:/app/data
     networks:
       - symbiotic-net
+    environment:
+      - PYTHONUNBUFFERED=1
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://127.0.0.1:8000/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 15s
+    restart: unless-stopped
 
   edge1:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.edge
     container_name: symbiotic-edge1
-    command: python -m edge.main
     environment:
       - EDGE_ID=edge1
+      - PYTHONUNBUFFERED=1
     depends_on:
       server:
         condition: service_healthy
@@ -38,15 +38,16 @@ services:
       - ./data:/app/data
     networks:
       - symbiotic-net
+    restart: unless-stopped
 
   edge2:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.edge
     container_name: symbiotic-edge2
-    command: python -m edge.main
     environment:
       - EDGE_ID=edge2
+      - PYTHONUNBUFFERED=1
     depends_on:
       server:
         condition: service_healthy
@@ -55,15 +56,16 @@ services:
       - ./data:/app/data
     networks:
       - symbiotic-net
+    restart: unless-stopped
 
   edge3:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.edge
     container_name: symbiotic-edge3
-    command: python -m edge.main
     environment:
       - EDGE_ID=edge3
+      - PYTHONUNBUFFERED=1
     depends_on:
       server:
         condition: service_healthy
@@ -72,21 +74,26 @@ services:
       - ./data:/app/data
     networks:
       - symbiotic-net
+    restart: unless-stopped
 
   dashboard:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dashboard
     container_name: symbiotic-dashboard
-    command: streamlit run dashboard/app.py --server.port=8501 --server.address=0.0.0.0
     ports:
       - "8501:8501"
     volumes:
       - ./logs:/app/logs
+      - ./data:/app/data:ro
     networks:
       - symbiotic-net
     depends_on:
-      - server
+      server:
+        condition: service_healthy
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
 
 networks:
   symbiotic-net:
