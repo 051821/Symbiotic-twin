@@ -50,8 +50,8 @@ def get_edge_partition(
     # Return cached tensors if available
     if train_pt.exists() and test_pt.exists():
         logger.info(f"[{device_id}] Loading cached partition from {partitions_path}")
-        train_data = torch.load(train_pt)
-        test_data  = torch.load(test_pt)
+        train_data = torch.load(train_pt, weights_only=False)
+        test_data  = torch.load(test_pt, weights_only=False)
         return train_data, test_data
 
     logger.info(f"[{device_id}] Building partition from {processed_path}")

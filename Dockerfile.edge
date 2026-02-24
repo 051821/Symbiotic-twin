@@ -1,0 +1,23 @@
+FROM python:3.10-slim AS builder
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    python -m pip install --upgrade pip setuptools wheel
+COPY requirements-edge.txt .
+RUN pip install --no-cache-dir \
+    --extra-index-url https://download.pytorch.org/whl/cpu \
+    -r requirements-edge.txt && rm -rf /root/.cache/pip
+
+FROM python:3.10-slim
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
+COPY edge/ ./edge/
+COPY shared/ ./shared/
+COPY config/ ./config/
+COPY metrics/ ./metrics/
+RUN mkdir -p logs
+CMD ["python", "-m", "edge.main"]
