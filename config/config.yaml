@@ -1,9 +1,9 @@
 system:
   num_edges: 3
-  num_rounds: 10
+  num_rounds: 2
   learning_rate: 0.001
   batch_size: 64
-  epochs_per_round: 5
+  epochs_per_round: 1
   seed: 42
 
 
