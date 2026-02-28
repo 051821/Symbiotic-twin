@@ -28,12 +28,6 @@ def send_update(
     energy_j:     float = 0.0,
     timeout:      int   = 30,
 ) -> bool:
-    """
-    POST local model weights to the federated server.
-
-    Returns:
-        True if the server acknowledged successfully.
-    """
     url     = f"{_server_url()}/update"
     payload = {
         "edge_id":      edge_id,
@@ -42,36 +36,28 @@ def send_update(
         "accuracy":     accuracy,
         "latency_ms":   latency_ms,
         "energy_j":     energy_j,
+        "signature":    "",
+        "timestamp":    0,
     }
-
     try:
         response = requests.post(url, json=payload, timeout=timeout)
         response.raise_for_status()
-        logger.info(f"[{edge_id}] Update sent successfully → {response.json()}")
+        logger.info(f"[{edge_id}] Update sent → {response.json()}")
         return True
     except requests.exceptions.RequestException as e:
         logger.error(f"[{edge_id}] Failed to send update: {e}")
         return False
 
 
-def fetch_global_model(
-    timeout: int = 30,
-) -> Optional[Tuple[Dict[str, torch.Tensor], int]]:
-    """
-    GET the latest global model from the federated server.
-
-    Returns:
-        (state_dict, version) or None on failure.
-    """
+def fetch_global_model(timeout: int = 30) -> Optional[Tuple[Dict[str, torch.Tensor], int]]:
     url = f"{_server_url()}/global-model"
-
     try:
         response = requests.get(url, timeout=timeout)
         response.raise_for_status()
-        data     = response.json()
-        weights  = deserialize_weights(data["weights"])
-        version  = data.get("version", -1)
-        logger.info(f"Global model fetched (version {version})")
+        data    = response.json()
+        weights = deserialize_weights(data["weights"])
+        version = data.get("version", -1)
+        logger.info(f"Global model fetched (v{version})")
         return weights, version
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to fetch global model: {e}")
@@ -79,7 +65,6 @@ def fetch_global_model(
 
 
 def check_server_health(timeout: int = 5) -> bool:
-    """Ping the server health endpoint. Returns True if reachable."""
     try:
         r = requests.get(f"{_server_url()}/health", timeout=timeout)
         return r.status_code == 200

@@ -11,81 +11,39 @@ logger = setup_logger("cognitive")
 
 
 class CognitiveLayer:
-    """
-    Adjusts local training hyperparameters between federated rounds.
+    def __init__(self, edge_id: str, initial_lr: float = 0.001, energy_budget_j: float = 50.0):
+        self.edge_id       = edge_id
+        self.lr            = initial_lr
+        self.energy_budget = energy_budget_j
+        self.energy_spent  = 0.0
+        self.acc_history:  List[float] = []
+        self.lr_history:   List[float] = []
 
-    Strategies
-    ----------
-    - Learning rate decay on accuracy plateau.
-    - Energy-aware early stopping if energy budget exceeded.
-    - Momentum boost on consistent improvement.
-    """
-
-    def __init__(
-        self,
-        edge_id: str,
-        initial_lr: float = 0.001,
-        energy_budget_j: float = 50.0,
-    ):
-        self.edge_id        = edge_id
-        self.lr             = initial_lr
-        self.energy_budget  = energy_budget_j
-        self.energy_spent   = 0.0
-        self.acc_history:   List[float] = []
-        self.lr_history:    List[float] = []
-
-    def adapt(
-        self,
-        current_accuracy: float,
-        energy_used_j:    float,
-    ) -> float:
-        """
-        Analyse recent training performance and adjust learning rate.
-
-        Args:
-            current_accuracy : Accuracy from the just-completed round (%).
-            energy_used_j    : Energy consumed in the just-completed round (J).
-
-        Returns:
-            Updated learning rate.
-        """
+    def adapt(self, current_accuracy: float, energy_used_j: float) -> float:
         self.acc_history.append(current_accuracy)
         self.energy_spent += energy_used_j
 
-        # --- Plateau detection (last 3 rounds) ---
         if len(self.acc_history) >= 3:
             recent = self.acc_history[-3:]
             delta  = max(recent) - min(recent)
-            if delta < 0.5:          # stagnating
+            if delta < 0.5:
                 self.lr *= 0.7
-                logger.info(
-                    f"[{self.edge_id}] Plateau detected — reducing LR to {self.lr:.6f}"
-                )
+                logger.info(f"[{self.edge_id}] Plateau detected → LR={self.lr:.6f}")
 
-        # --- Improvement boost ---
         if len(self.acc_history) >= 2:
             if self.acc_history[-1] > self.acc_history[-2] + 1.0:
                 self.lr = min(self.lr * 1.1, 0.01)
-                logger.info(
-                    f"[{self.edge_id}] Accuracy improving — boosting LR to {self.lr:.6f}"
-                )
+                logger.info(f"[{self.edge_id}] Improving → LR={self.lr:.6f}")
 
-        # --- Energy constraint ---
         if self.energy_spent > self.energy_budget:
             self.lr *= 0.5
-            logger.warning(
-                f"[{self.edge_id}] Energy budget exceeded ({self.energy_spent:.2f}J) "
-                f"— throttling LR to {self.lr:.6f}"
-            )
+            logger.warning(f"[{self.edge_id}] Energy exceeded → LR={self.lr:.6f}")
 
-        # Clamp learning rate
         self.lr = max(1e-6, min(self.lr, 0.05))
         self.lr_history.append(self.lr)
-
         return self.lr
 
     def should_skip_round(self) -> bool:
-        """Return True if edge should sit out this round (energy depleted)."""
         return self.energy_spent > self.energy_budget * 2
 
     def status(self) -> dict:

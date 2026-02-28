@@ -154,15 +154,30 @@ symbiotic-twin/
 │
 ├── shared/
 │   ├── model.py
-│   └── serialization.py
+│   ├── serialization.py
+│   └── utils.py
 │
 ├── data/
 │   ├── preprocess.py
 │   └── partition.py
 │
+├── scripts/
+│   └── mock_feeder.py
+│
 ├── logs/
-├── docker-compose.yml
-├── requirements.txt
+├── data/                    # Dataset & partitions (created at runtime)
+│
+├── docker-compose.yml       # Orchestrates server, edge1–3, dashboard
+├── Dockerfile.server        # Federated server image (FastAPI/Uvicorn)
+├── Dockerfile.edge          # Edge node image (PyTorch, training)
+├── Dockerfile.dashboard     # Streamlit dashboard image
+├── requirements-server.txt  # Server dependencies
+├── requirements-edge.txt   # Edge dependencies (PyTorch CPU, etc.)
+├── requirements-dashboard.txt
+├── .dockerignore
+├── quickstart.sh            # One-command Docker setup
+├── verify-docker-setup.sh   # Validate Docker config before run
+├── optimize-and-build.sh    # Clean build & optional optimizations
 └── README.md
 ```
 
@@ -410,16 +425,71 @@ Provides:
 
 ## 📦 Installation
 
+**Recommended: run with Docker** (see below). No local Python install required.
+
+For local development without Docker, install dependencies per component:
+
 ```bash
-pip install -r requirements.txt
+# Server (API)
+pip install -r requirements-server.txt
+
+# Edge (training; use Python 3.10, PyTorch CPU)
+pip install -r requirements-edge.txt
+
+# Dashboard (Streamlit)
+pip install -r requirements-dashboard.txt
 ```
+
+Ensure directories exist: `mkdir -p logs data`. Preprocess and partition data as needed (see `data/`).
 
 ---
 
 ## 🐳 Run Using Docker
 
+**Prerequisites:** Docker and Docker Compose installed and running (e.g. Docker Desktop).
+
+The stack runs five containers: one **server** (FastAPI), three **edge** nodes (PyTorch CPU training), and one **dashboard** (Streamlit). Images are built from `Dockerfile.server`, `Dockerfile.edge`, and `Dockerfile.dashboard` (Python 3.10).
+
+### Option 1: Quick start (recommended)
+
 ```bash
+chmod +x quickstart.sh
+./quickstart.sh
+```
+
+This checks Docker, creates `logs/` and `data/`, builds images, starts all services, and prints access URLs.
+
+### Option 2: Manual steps
+
+```bash
+# Optional: verify Docker setup
+./verify-docker-setup.sh
+
+# Create directories
+mkdir -p logs data
+
+# Build and start
 docker-compose up --build
+```
+
+Run in background: `docker-compose up -d --build`.
+
+### Access URLs
+
+| Service        | URL                        |
+|----------------|----------------------------|
+| API server     | http://localhost:8000       |
+| API docs       | http://localhost:8000/docs |
+| Health check   | http://localhost:8000/health |
+| Dashboard      | http://localhost:8501      |
+
+### Useful commands
+
+```bash
+docker-compose ps          # Status
+docker-compose logs -f     # Follow logs
+docker-compose stop        # Stop services
+docker-compose down        # Stop and remove containers
 ```
 
 ---

@@ -1,12 +1,16 @@
 """
 edge/trainer.py
-Handles local model training and evaluation on edge nodes.
+Local model training and evaluation on edge nodes.
+
+Improvements:
+  - class_weights passed to CrossEntropyLoss to fix Normal/Warning/Critical imbalance
+  - Evaluates on test set after every epoch so we can track real generalisation
 """
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from typing import Tuple
+from typing import Tuple, Optional
 
 from config.loader import get_config
 from config.logging_config import setup_logger
@@ -20,24 +24,41 @@ logger = setup_logger("trainer")
 class LocalTrainer:
     """Trains a model on a local edge dataset for one federated round."""
 
-    def __init__(self, model: nn.Module, edge_id: str):
+    def __init__(
+        self,
+        model: nn.Module,
+        edge_id: str,
+        class_weights: Optional[torch.Tensor] = None,
+    ):
         cfg = get_config()
-        self.edge_id    = edge_id
-        self.model      = model
-        self.epochs     = cfg["system"]["epochs_per_round"]
-        self.lr         = cfg["system"]["learning_rate"]
-        self.device     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.edge_id = edge_id
+        self.model   = model
+        self.epochs  = cfg["system"]["epochs_per_round"]
+        self.lr      = cfg["system"]["learning_rate"]
+        self.device  = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model.to(self.device)
-        self.criterion  = nn.CrossEntropyLoss()
-        self.optimizer  = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+
+        # Use class-weighted loss to handle Normal >> Warning > Critical imbalance
+        if class_weights is not None:
+            cw = class_weights.to(self.device)
+            logger.info(f"[{edge_id}] Using class weights: {cw.tolist()}")
+        else:
+            cw = None
+
+        self.criterion = nn.CrossEntropyLoss(weight=cw)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+
+    def update_class_weights(self, class_weights: torch.Tensor) -> None:
+        """Update loss weights when the window shifts to a new data slice."""
+        cw = class_weights.to(self.device)
+        self.criterion = nn.CrossEntropyLoss(weight=cw)
+        logger.info(f"[{self.edge_id}] Class weights updated: {cw.tolist()}")
 
     def train(self, train_loader: DataLoader) -> Tuple[float, float, float]:
         """
-        Train the model for configured number of epochs.
-
-        Returns:
-            (accuracy_%, latency_ms, energy_j)
+        Train for configured epochs. Returns (accuracy_%, latency_ms, energy_j).
+        Each epoch processes one full pass over the current temporal window.
         """
         self.model.train()
         total_correct, total_samples = 0, 0
@@ -63,7 +84,7 @@ class LocalTrainer:
 
                     epoch_acc = epoch_correct / epoch_total * 100 if epoch_total else 0
                     logger.info(
-                        f"[{self.edge_id}] Epoch {epoch + 1}/{self.epochs} "
+                        f"[{self.edge_id}] Epoch {epoch+1}/{self.epochs} "
                         f"| Accuracy: {epoch_acc:.2f}%"
                     )
                     total_correct = epoch_correct
@@ -74,13 +95,13 @@ class LocalTrainer:
         energy_j   = energy.energy_j
 
         logger.info(
-            f"[{self.edge_id}] Training complete "
-            f"| Accuracy={accuracy:.2f}% | Latency={latency_ms:.1f}ms | Energy={energy_j:.4f}J"
+            f"[{self.edge_id}] Train done "
+            f"| Acc={accuracy:.2f}% | Latency={latency_ms:.1f}ms | Energy={energy_j:.4f}J"
         )
         return accuracy, latency_ms, energy_j
 
     def evaluate(self, test_loader: DataLoader) -> float:
-        """Evaluate model on test set. Returns accuracy %."""
+        """Evaluate model on the fixed held-out test set. Returns accuracy %."""
         self.model.eval()
         correct, total = 0, 0
         with torch.no_grad():
@@ -91,7 +112,6 @@ class LocalTrainer:
                 c, t    = compute_batch_accuracy(outputs, y_batch)
                 correct += c
                 total   += t
-
         acc = correct / total * 100 if total else 0
         logger.info(f"[{self.edge_id}] Test Accuracy: {acc:.2f}%")
         return acc

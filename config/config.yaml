@@ -1,34 +1,28 @@
 system:
   num_edges: 3
-  num_rounds: 2
+  num_rounds: 10
   learning_rate: 0.001
   batch_size: 64
   epochs_per_round: 1
   seed: 42
 
-
-# IMPORTANT: Use docker-compose service name, NOT 0.0.0.0
 server:
-  host: "symbiotic-server"
+  host: "server"
   port: 8000
-
 
 edges:
   - id: "edge1"
     device: "b8:27:eb:bf:9d:51"
-    host: "symbiotic-edge1"
+    host: "127.0.0.1"
     port: 8001
-
   - id: "edge2"
     device: "00:0f:00:70:91:0a"
-    host: "symbiotic-edge2"
+    host: "127.0.0.1"
     port: 8002
-
   - id: "edge3"
     device: "1c:bf:ce:15:ec:4d"
-    host: "symbiotic-edge3"
+    host: "127.0.0.1"
     port: 8003
-
 
 model:
   input_size: 7
@@ -36,28 +30,28 @@ model:
   num_classes: 3
   dropout: 0.3
 
-
 aggregation:
-  strategy: "fedavg"            # fedavg | adaptive
+  strategy: "fedavg"
   adaptive_weighting: true
   reputation_enabled: true
   min_reputation: 0.1
 
-
 data:
-  raw_path: "/app/data/iot_telemetry_data.csv"
-  processed_path: "/app/data/processed/"
-  partitions_path: "/app/data/partitions/"
+  raw_path: "data/iot_telemetry_data.csv"
+  processed_path: "data/processed/"
+  partitions_path: "data/partitions/"
   test_split: 0.2
-
+  # Temporal sliding window — each round trains on a fresh time slice
+  window_strategy: "sliding"   # sliding | expanding | full
+  window_fraction: 0.3         # 30% of device data per round
+  window_step: 0.1             # window moves 10% forward per round
 
 logging:
   level: "INFO"
-  log_dir: "/app/logs/"
+  log_dir: "logs/"
   format: "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
   date_format: "%Y-%m-%d %H:%M:%S"
 
-
 dashboard:
   refresh_interval: 3
-  metrics_path: "/app/logs/metrics.json"
+  metrics_path: "logs/metrics.json"
