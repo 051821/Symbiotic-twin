@@ -11,7 +11,7 @@ logger = setup_logger("cognitive")
 
 
 class CognitiveLayer:
-    def __init__(self, edge_id: str, initial_lr: float = 0.001, energy_budget_j: float = 50.0):
+    def __init__(self, edge_id: str, initial_lr: float = 0.001, energy_budget_j: float = 10000.0):
         self.edge_id       = edge_id
         self.lr            = initial_lr
         self.energy_budget = energy_budget_j
