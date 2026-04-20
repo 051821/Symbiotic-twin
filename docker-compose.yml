@@ -82,7 +82,7 @@ services:
       dockerfile: Dockerfile.dashboard
     container_name: symbiotic-dashboard
     ports:
-      - "8501:8501"
+      - "8502:8502"
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data:ro
