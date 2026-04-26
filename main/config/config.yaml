@@ -1,0 +1,62 @@
+system:
+  num_edges: 3
+  num_rounds: 10
+  learning_rate: 0.0012
+  batch_size: 256
+  epochs_per_round: 1
+  max_train_samples_per_round: 14000
+  dataloader_workers: 2
+  seed: 42
+
+server:
+  host: "server"
+  port: 8000
+
+edges:
+  - id: "edge1"
+    device: "b8:27:eb:bf:9d:51"
+    host: "127.0.0.1"
+    port: 8001
+  - id: "edge2"
+    device: "00:0f:00:70:91:0a"
+    host: "127.0.0.1"
+    port: 8002
+  - id: "edge3"
+    device: "1c:bf:ce:15:ec:4d"
+    host: "127.0.0.1"
+    port: 8003
+
+model:
+  input_size: 7
+  hidden_size: 80
+  num_classes: 3
+  dropout: 0.1
+  weight_decay: 0.0001
+  label_smoothing: 0.02
+  grad_clip_norm: 1.0
+
+aggregation:
+  strategy: "fedavg"
+  adaptive_weighting: true
+  reputation_enabled: true
+  min_reputation: 0.1
+
+data:
+  raw_path: "data/iot_telemetry_data.csv"
+  processed_path: "data/processed/"
+  partitions_path: "data/partitions/"
+  test_split: 0.2
+  # Temporal sliding window — each round trains on a fresh time slice
+  window_strategy: "expanding" # sliding | expanding | full
+  window_fraction: 0.22        # 22% initial train window
+  window_step: 0.06            # smoother growth per round
+
+logging:
+  level: "INFO"
+  log_dir: "logs/"
+  format: "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+
+dashboard:
+  refresh_interval: 3
+  metrics_path: "logs/metrics.json"

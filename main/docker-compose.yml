@@ -1,0 +1,100 @@
+services:
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: symbiotic-server
+    ports:
+      - "18000:8000"
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - symbiotic-net
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  edge1:
+    build:
+      context: .
+      dockerfile: Dockerfile.edge
+    container_name: symbiotic-edge1
+    environment:
+      - EDGE_ID=edge1
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      server:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - symbiotic-net
+    restart: "no"   # edges exit cleanly after all rounds — no infinite restart
+
+  edge2:
+    build:
+      context: .
+      dockerfile: Dockerfile.edge
+    container_name: symbiotic-edge2
+    environment:
+      - EDGE_ID=edge2
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      server:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - symbiotic-net
+    restart: "no"
+
+  edge3:
+    build:
+      context: .
+      dockerfile: Dockerfile.edge
+    container_name: symbiotic-edge3
+    environment:
+      - EDGE_ID=edge3
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      server:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - symbiotic-net
+    restart: "no"
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: symbiotic-dashboard
+    ports:
+      - "18502:8502"
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data:ro
+    networks:
+      - symbiotic-net
+    depends_on:
+      server:
+        condition: service_healthy
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+
+networks:
+  symbiotic-net:
+    driver: bridge

@@ -1,34 +1,35 @@
-# Python
+# Python caches
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
-*.pyd
 
-# Virtual Environments
+# Virtual environments
 venv/
-env/
 .venv/
+env/
 
-# Logs
-logs/
-*.log
+# Local tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Dataset
-data/*.csv
-
-# OS Files
+# OS/editor noise
 .DS_Store
 Thumbs.db
 
-# IDE
-.vscode/
-.idea/
+# Logs and runtime artifacts
+logs/
+*.log
 
-# Streamlit
+# Generated datasets and model artifacts
+main/data/processed/
+main/data/partitions/
+Centrelized symbiotic twin/metrics.csv
+Centrelized symbiotic twin/*.png
+
+# Streamlit local state
 .streamlit/
 
-# Docker
-*.tar
-
-# Jupyter
-.ipynb_checkpoints/
+# Local VS Code state except shared workspace settings
+.vscode/*
+!.vscode/settings.json

@@ -1,0 +1,8 @@
+model:
+  input_size: 7
+  hidden_size: 64
+  num_classes: 3
+  dropout: 0.3
+
+data:
+  test_split: 0.2
