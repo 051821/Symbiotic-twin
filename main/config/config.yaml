@@ -1,11 +1,11 @@
 system:
   num_edges: 3
   num_rounds: 10
-  learning_rate: 0.0012
-  batch_size: 256
+  learning_rate: 0.001
+  batch_size: 768
   epochs_per_round: 1
-  max_train_samples_per_round: 14000
-  dataloader_workers: 2
+  max_train_samples_per_round: 7500
+  dataloader_workers: 0
   seed: 42
 
 server:
@@ -46,10 +46,11 @@ data:
   processed_path: "data/processed/"
   partitions_path: "data/partitions/"
   test_split: 0.2
+  test_split_mode: "stratified"  # temporal | stratified
   # Temporal sliding window — each round trains on a fresh time slice
-  window_strategy: "expanding" # sliding | expanding | full
-  window_fraction: 0.22        # 22% initial train window
-  window_step: 0.06            # smoother growth per round
+  window_strategy: "full"      # sliding | expanding | full
+  window_fraction: 0.22
+  window_step: 0.06
 
 logging:
   level: "INFO"

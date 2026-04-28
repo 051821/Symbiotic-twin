@@ -30,6 +30,7 @@ METRICS_JSON_PATH = Path(__file__).with_name("metrics.json")
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.yaml"
 METRICS_CSV_PATH = SCRIPT_DIR / "metrics.csv"
+FAIR_CFG_PATH = ROOT / "main" / "config" / "config.yaml"
 
 
 def count_parameters(model):
@@ -65,6 +66,11 @@ class EnergyMonitor:
 with CONFIG_PATH.open("r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
+fair_cfg = {}
+if FAIR_CFG_PATH.exists():
+    with FAIR_CFG_PATH.open("r", encoding="utf-8") as f:
+        fair_cfg = yaml.safe_load(f) or {}
+
 input_size = config["model"]["input_size"]
 hidden_size = config["model"]["hidden_size"]
 num_classes = config["model"]["num_classes"]
@@ -97,13 +103,14 @@ model = Model()
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-epochs = 30
+epochs = int((fair_cfg.get("system", {}) or {}).get("num_rounds", 10))
 metrics = []
 
 print("Starting Centralized Training...\n")
 print(f"Canonical shared preprocessed CSV: {BASELINE_DATA_PATH}")
 
 for epoch in range(1, epochs + 1):
+    epoch_start = time.perf_counter()
     with EnergyMonitor(model=model) as monitor:
         optimizer.zero_grad()
         outputs = model(X_train)
@@ -112,7 +119,7 @@ for epoch in range(1, epochs + 1):
         optimizer.step()
 
     energy_j = monitor.energy_j
-    latency_ms = (energy_j / BASELINE_POWER_W) * 1000
+    latency_ms = (time.perf_counter() - epoch_start) * 1000
 
     with torch.no_grad():
         preds = model(X_test).argmax(dim=1)
@@ -146,6 +153,7 @@ metrics_payload = build_metrics_payload(
         "model": "centralized",
         "baseline_data_path": str(BASELINE_DATA_PATH),
         "metrics_csv": str(METRICS_CSV_PATH),
+        "epochs": epochs,
     },
 )
 save_metrics_payload(METRICS_JSON_PATH, metrics_payload)

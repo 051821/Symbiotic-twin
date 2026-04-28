@@ -56,6 +56,8 @@ class LocalTrainer:
             lr=self.lr,
             weight_decay=self.weight_decay,
         )
+        self._use_amp = self.device.type == "cuda"
+        self._scaler = torch.cuda.amp.GradScaler(enabled=self._use_amp)
 
     def update_class_weights(self, class_weights: torch.Tensor) -> None:
         """Update loss weights when the window shifts to a new data slice."""
@@ -63,7 +65,7 @@ class LocalTrainer:
         self.criterion = nn.CrossEntropyLoss(weight=cw, label_smoothing=self.label_smoothing)
         logger.info(f"[{self.edge_id}] Class weights updated: {cw.tolist()}")
 
-    def train(self, train_loader: DataLoader) -> Tuple[float, float, float]:
+    def train(self, train_loader: DataLoader, epochs_override: Optional[int] = None) -> Tuple[float, float, float]:
         """
         Train for configured epochs. Returns (accuracy_%, latency_ms, energy_j).
         Each epoch processes one full pass over the current temporal window.
@@ -71,22 +73,36 @@ class LocalTrainer:
         self.model.train()
         total_correct, total_samples = 0, 0
 
+        epochs_to_run = max(1, int(epochs_override if epochs_override is not None else self.epochs))
         with EnergyMonitor(self.model) as energy:
             with LatencyTimer() as timer:
-                for epoch in range(self.epochs):
+                for epoch in range(epochs_to_run):
                     epoch_correct, epoch_total = 0, 0
 
                     for X_batch, y_batch in train_loader:
-                        X_batch = X_batch.to(self.device)
-                        y_batch = y_batch.to(self.device)
+                        X_batch = X_batch.to(self.device, non_blocking=True)
+                        y_batch = y_batch.to(self.device, non_blocking=True)
 
-                        self.optimizer.zero_grad()
-                        outputs = self.model(X_batch)
-                        loss    = self.criterion(outputs, y_batch)
-                        loss.backward()
-                        if self.grad_clip_norm and self.grad_clip_norm > 0:
-                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
-                        self.optimizer.step()
+                        self.optimizer.zero_grad(set_to_none=True)
+                        if self._use_amp:
+                            with torch.autocast(device_type="cuda", dtype=torch.float16):
+                                outputs = self.model(X_batch)
+                                loss = self.criterion(outputs, y_batch)
+                        else:
+                            outputs = self.model(X_batch)
+                            loss = self.criterion(outputs, y_batch)
+                        if self._use_amp:
+                            self._scaler.scale(loss).backward()
+                            if self.grad_clip_norm and self.grad_clip_norm > 0:
+                                self._scaler.unscale_(self.optimizer)
+                                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                            self._scaler.step(self.optimizer)
+                            self._scaler.update()
+                        else:
+                            loss.backward()
+                            if self.grad_clip_norm and self.grad_clip_norm > 0:
+                                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                            self.optimizer.step()
 
                         c, t = compute_batch_accuracy(outputs, y_batch)
                         epoch_correct += c
@@ -94,7 +110,7 @@ class LocalTrainer:
 
                     epoch_acc = epoch_correct / epoch_total * 100 if epoch_total else 0
                     logger.info(
-                        f"[{self.edge_id}] Epoch {epoch+1}/{self.epochs} "
+                        f"[{self.edge_id}] Epoch {epoch+1}/{epochs_to_run} "
                         f"| Accuracy: {epoch_acc:.2f}%"
                     )
                     total_correct = epoch_correct
@@ -116,8 +132,8 @@ class LocalTrainer:
         correct, total = 0, 0
         with torch.no_grad():
             for X_batch, y_batch in test_loader:
-                X_batch = X_batch.to(self.device)
-                y_batch = y_batch.to(self.device)
+                X_batch = X_batch.to(self.device, non_blocking=True)
+                y_batch = y_batch.to(self.device, non_blocking=True)
                 outputs = self.model(X_batch)
                 c, t    = compute_batch_accuracy(outputs, y_batch)
                 correct += c

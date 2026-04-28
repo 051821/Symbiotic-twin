@@ -16,7 +16,8 @@ def load_edge_data(
     device_id: str,
     round_num: int = 0,
     batch_size: int = None,
-) -> Tuple[DataLoader, DataLoader, torch.Tensor]:
+    max_train_samples: int = None,
+) -> Tuple[DataLoader, DataLoader, torch.Tensor, int]:
     """
     Return DataLoaders for the given device's current-round window.
 
@@ -26,14 +27,18 @@ def load_edge_data(
         batch_size : Override config batch size if provided.
 
     Returns:
-        (train_loader, test_loader, class_weights)
+        (train_loader, test_loader, class_weights, sample_count)
     """
     cfg        = get_config()
     batch_size = batch_size or cfg["system"]["batch_size"]
     num_workers = int(cfg["system"].get("dataloader_workers", 0) or 0)
     pin_memory = torch.cuda.is_available()
 
-    train_ds, test_ds, class_weights = get_edge_partition(device_id, round_num=round_num)
+    train_ds, test_ds, class_weights = get_edge_partition(
+        device_id,
+        round_num=round_num,
+        max_train_samples_override=max_train_samples,
+    )
 
     train_loader = DataLoader(
         train_ds,
@@ -54,7 +59,7 @@ def load_edge_data(
         persistent_workers=bool(num_workers > 0),
     )
 
-    return train_loader, test_loader, class_weights
+    return train_loader, test_loader, class_weights, len(train_ds)
 
 
 def get_sample_count(device_id: str, round_num: int = 0) -> int:

@@ -16,41 +16,60 @@ from baseline_shared.metrics_utils import build_metrics_payload, save_metrics_pa
 
 METRICS_JSON_PATH = Path(__file__).with_name("metrics.json")
 SYMBIOTIC_METRICS_PATH = ROOT / "main" / "logs" / "metrics.json"
+BASELINE_POWER_W = 2.5
 
 
-def local_train(global_weights, X_local, y_local):
+# ✅ SIMPLE LOCAL TRAIN
+def local_train(global_weights, X_local, y_local, classes):
     start = time.time()
-    model = LogisticRegression(max_iter=200, warm_start=False, random_state=42)
+
+    coef, intercept = global_weights
+
+    # Use a moderate iteration budget for stable convergence while staying fast.
+    model = LogisticRegression(
+        max_iter=12,
+        tol=1e-2,
+        solver="lbfgs",
+        C=0.2,
+        warm_start=True,
+    )
+
+    # Initialize from global model
+    model.classes_ = classes
+    model.coef_ = coef.copy()
+    model.intercept_ = intercept.copy()
+
     model.fit(X_local, y_local)
+
     preds = model.predict(X_local)
     accuracy = accuracy_score(y_local, preds) * 100
+
     elapsed = time.time() - start
-    energy = round((0.9 + 0.15 * len(np.unique(y_local))) * elapsed, 4)
+
     return {
         "coef": model.coef_,
         "intercept": model.intercept_,
         "samples": len(X_local),
         "accuracy": round(accuracy, 4),
         "latency_ms": round(elapsed * 1000, 4),
-        "energy_j": energy,
+        "energy_j": round(BASELINE_POWER_W * elapsed, 4),
     }
 
 
+# ✅ FEDAVG
 def fedavg_aggregate(updates, total_samples):
     coef_avg = np.zeros_like(updates[0]["coef"])
     int_avg = np.zeros_like(updates[0]["intercept"])
+
     for update in updates:
         w = update["samples"] / total_samples
         coef_avg += w * update["coef"]
         int_avg += w * update["intercept"]
+
     return coef_avg, int_avg
 
 
 def _load_symbiotic_summary():
-    """
-    Load real Symbiotic-Twin metrics if available.
-    Returns None when the Symbiotic pipeline has not been run yet.
-    """
     if not SYMBIOTIC_METRICS_PATH.exists():
         return None
 
@@ -69,89 +88,92 @@ def _load_symbiotic_summary():
     for series in energy.values():
         energy_values.extend(series or [])
 
-    latency_mean = round(float(np.mean(latency_values)), 1) if latency_values else 0.0
-    energy_mean = round(float(np.mean(energy_values)), 4) if energy_values else 0.0
-
     return {
         "accuracy": round(float(global_acc[-1]), 2) if global_acc else 0.0,
-        "latency_ms": latency_mean,
-        "energy_j": energy_mean,
+        "latency_ms": round(float(np.mean(latency_values)), 1) if latency_values else 0.0,
+        "energy_j": round(float(np.mean(energy_values)), 4) if energy_values else 0.0,
         "source": str(SYMBIOTIC_METRICS_PATH),
     }
 
 
-def run_fedavg(n_rounds=20, n_clients=4, seed=42):
+def run_fedavg(n_rounds=10, n_clients=4, seed=42):
     ensure_baseline_data()
+
     X_train, X_test, y_train, y_test = load_baseline_split(test_size=0.2, seed=seed)
     clients = split_non_iid(X_train, y_train, n_clients=n_clients, seed=seed)
 
-    global_model = LogisticRegression(max_iter=200, random_state=42)
-    global_model.fit(X_train, y_train)
-    global_coef = global_model.coef_.copy()
-    global_inter = global_model.intercept_.copy()
+    # ✅ Random initialization (NO pretraining)
+    n_features = X_train.shape[1]
+    n_classes = len(np.unique(y_train))
+
+    global_coef = np.zeros((n_classes, n_features))
+    global_inter = np.zeros(n_classes)
+
+    classes = np.unique(y_train)
 
     round_metrics = []
     energy_per_round = []
+
     edge_acc = {f"edge{i+1}": [] for i in range(n_clients)}
     latency = {f"edge{i+1}": [] for i in range(n_clients)}
     edge_energy = {f"edge{i+1}": [] for i in range(n_clients)}
     agg_weights = []
     reputation = {f"edge{i+1}": [] for i in range(n_clients)}
+
     start_total = time.time()
 
     for r in range(1, n_rounds + 1):
+        print(f"🚀 Round {r} starting...")
+
         updates = []
         round_start = time.time()
+
         for idx, (X_c, y_c) in enumerate(clients, start=1):
-            result = local_train((global_coef, global_inter), X_c, y_c)
+            result = local_train((global_coef, global_inter), X_c, y_c, classes)
+
             edge_id = f"edge{idx}"
             edge_acc[edge_id].append(result["accuracy"])
             latency[edge_id].append(result["latency_ms"])
             edge_energy[edge_id].append(result["energy_j"])
             reputation[edge_id].append(1.0)
+
             updates.append(result)
+
         total_n = sum(u["samples"] for u in updates)
-        weight_map = {
+
+        agg_weights.append({
             f"edge{i+1}": round(updates[i]["samples"] / total_n, 4)
             for i in range(len(updates))
-        }
-        agg_weights.append(weight_map)
+        })
+
+        # ✅ Aggregate
         global_coef, global_inter = fedavg_aggregate(updates, total_n)
 
-        eval_model = LogisticRegression(max_iter=500, random_state=42)
-        eval_model.fit(X_train, y_train)
+        # ✅ Evaluate (NO training here)
+        eval_model = LogisticRegression()
+        eval_model.classes_ = classes
         eval_model.coef_ = global_coef.copy()
         eval_model.intercept_ = global_inter.copy()
+
         preds = eval_model.predict(X_test)
         acc = accuracy_score(y_test, preds) * 100
 
-        round_elapsed = time.time() - round_start
-        lat = round_elapsed * 1000
-        round_energy = round((0.9 + 0.15 * n_clients) * round_elapsed, 4)
+        print(f"Round {r} Accuracy: {round(acc, 2)}%")
 
-        round_metrics.append(
-            {
-                "round": r,
-                "accuracy": round(acc, 2),
-                "latency_ms": round(lat, 1),
-                "energy_j": round(round_energy, 4),
-            }
-        )
-        energy_per_round.append(round_energy)
+        round_elapsed = time.time() - round_start
+
+        round_metrics.append({
+            "round": r,
+            "accuracy": round(acc, 2),
+            "latency_ms": round(round_elapsed * 1000, 1),
+            "energy_j": round(BASELINE_POWER_W * round_elapsed, 4),
+        })
+
+        energy_per_round.append(BASELINE_POWER_W * round_elapsed)
 
     total_time = (time.time() - start_total) * 1000
-
     final = round_metrics[-1]
-    central_start = time.time()
-    centralized_model = LogisticRegression(max_iter=500, random_state=seed)
-    centralized_model.fit(X_train, y_train)
-    centralized_preds = centralized_model.predict(X_test)
-    centralized_elapsed = time.time() - central_start
-    centralized = {
-        "accuracy": round(accuracy_score(y_test, centralized_preds) * 100, 2),
-        "latency_ms": round(centralized_elapsed * 1000, 1),
-        "energy_j": round(2.5 * centralized_elapsed, 4),
-    }
+
     symbiotic = _load_symbiotic_summary()
 
     metrics_payload = build_metrics_payload(
@@ -169,29 +191,20 @@ def run_fedavg(n_rounds=20, n_clients=4, seed=42):
             "n_clients": n_clients,
         },
     )
+
     save_metrics_payload(METRICS_JSON_PATH, metrics_payload)
 
-    summary = {
+    return {
         "fedavg_accuracy": final["accuracy"],
         "fedavg_latency": round(total_time / n_rounds, 1),
         "fedavg_energy": round(sum(energy_per_round) / n_rounds, 4),
-        "centralized": centralized,
-        "symbiotic": symbiotic,
-        "symbiotic_available": symbiotic is not None,
-        "round_metrics": round_metrics,
-        "n_rounds": n_rounds,
-        "n_clients": n_clients,
-        "baseline_data_path": str(BASELINE_DATA_PATH),
-        "metrics_payload": metrics_payload,
         "metrics_path": str(METRICS_JSON_PATH),
     }
-    return summary
 
 
 if __name__ == "__main__":
     result = run_fedavg()
-    print(f"FedAvg  -> Accuracy: {result['fedavg_accuracy']}%  "
-          f"Latency: {result['fedavg_latency']} ms  "
-          f"Energy: {result['fedavg_energy']} J")
-    print(f"Canonical shared preprocessed CSV: {result['baseline_data_path']}")
-    print(f"Metrics JSON saved to {result['metrics_path']}")
+
+    print(f" FINAL FedAvg Accuracy: {result['fedavg_accuracy']}%")
+    print(f" Latency: {result['fedavg_latency']} ms")
+    print(f" Energy: {result['fedavg_energy']} J")

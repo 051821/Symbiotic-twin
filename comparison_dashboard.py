@@ -62,6 +62,22 @@ def _summarize_payload(payload: Dict[str, object]) -> Dict[str, object]:
     }
 
 
+def _truncate_summary(summary: Dict[str, object], n_rounds: int) -> Dict[str, object]:
+    rounds = list(summary.get("rounds", []))[:n_rounds]
+    acc = list(summary.get("accuracy_series", []))[:n_rounds]
+    lat = list(summary.get("latency_series", []))[:n_rounds]
+    eng = list(summary.get("energy_series", []))[:n_rounds]
+    return {
+        "rounds": rounds,
+        "accuracy_series": acc,
+        "latency_series": lat,
+        "energy_series": eng,
+        "final_accuracy": acc[-1] if acc else 0.0,
+        "avg_latency": float(np.mean(lat)) if lat else 0.0,
+        "avg_energy": float(np.mean(eng)) if eng else 0.0,
+    }
+
+
 available: Dict[str, Dict[str, object]] = {}
 missing = []
 for model_name, path in MODEL_PATHS.items():
@@ -104,9 +120,16 @@ st.divider()
 st.subheader("Side-by-Side Comparison: All Available Models")
 
 models = list(available.keys())
-accuracy = [available[m]["final_accuracy"] for m in models]
-latency = [available[m]["avg_latency"] for m in models]
-energy = [available[m]["avg_energy"] for m in models]
+common_rounds = min((len(available[m]["rounds"]) for m in models), default=0)
+if common_rounds > 0:
+    fair_view = {m: _truncate_summary(available[m], common_rounds) for m in models}
+    st.caption(f"Fair view uses the first {common_rounds} rounds for every model.")
+else:
+    fair_view = available
+
+accuracy = [fair_view[m]["final_accuracy"] for m in models]
+latency = [fair_view[m]["avg_latency"] for m in models]
+energy = [fair_view[m]["avg_energy"] for m in models]
 colors = ["#5b7fa6", "#4a9e7f", "#3266ad", "#b56576", "#e76f51"]
 
 fig, axes = plt.subplots(1, 3, figsize=(14, 4))
@@ -172,7 +195,15 @@ for bars in (b1, b2, b3):
 plt.tight_layout()
 st.pyplot(fig2)
 
+st.subheader("Balanced Overall Score (Fair Rounds)")
+balanced_scores = (acc_n + lat_n + eng_n) / 3.0
+rank_df = pd.DataFrame(
+    {"Model": models, "Balanced Score": balanced_scores}
+).sort_values("Balanced Score", ascending=False, ignore_index=True)
+rank_df["Rank"] = rank_df.index + 1
+st.dataframe(rank_df[["Rank", "Model", "Balanced Score"]], use_container_width=True)
+
 st.info(
-    "This dashboard reports stored metrics as-is from each model run. "
-    "For fair results, run all 3 models on the same preprocessed dataset and similar round settings."
+    "This dashboard now compares models over a shared round budget (minimum common rounds). "
+    "For strict fairness, re-run all models with the same dataset split, rounds, and metric formulas."
 )

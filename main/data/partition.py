@@ -19,6 +19,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Tuple, Dict
+from sklearn.model_selection import train_test_split
 
 from config.loader import get_config
 from config.logging_config import setup_logger
@@ -27,6 +28,8 @@ logger = setup_logger("partition")
 
 FEATURE_COLS = ["co", "humidity", "light", "lpg", "motion", "smoke", "temp"]
 LABEL_COL    = "label"
+_DATAFRAME_CACHE: Dict[Path, pd.DataFrame] = {}
+_DEVICE_CACHE: Dict[Tuple[Path, str, str], Tuple[np.ndarray, np.ndarray, int, np.ndarray, np.ndarray]] = {}
 
 
 def _compute_class_weights(y: np.ndarray) -> torch.Tensor:
@@ -51,6 +54,7 @@ def get_edge_partition(
     round_num: int = 0,
     processed_path: str = None,
     partitions_path: str = None,
+    max_train_samples_override: int = None,
 ) -> Tuple[torch.utils.data.TensorDataset, torch.utils.data.TensorDataset, torch.Tensor]:
     """
     Load train/test TensorDatasets for a specific device and round.
@@ -71,6 +75,7 @@ def get_edge_partition(
     processed_path  = Path(processed_path  or cfg["data"]["processed_path"]) / "processed.csv"
     partitions_path = Path(partitions_path or cfg["data"]["partitions_path"])
     test_split      = cfg["data"]["test_split"]
+    test_split_mode = cfg["data"].get("test_split_mode", "temporal")
     strategy        = cfg["data"].get("window_strategy", "sliding")
     win_frac        = cfg["data"].get("window_fraction", 0.3)
     win_step        = cfg["data"].get("window_step", 0.1)
@@ -79,21 +84,39 @@ def get_edge_partition(
 
     # ── Load device data ──────────────────────────────────────────────────
     logger.info(f"[{device_id}] Loading partition from {processed_path} | round={round_num} | strategy={strategy}")
-    df = pd.read_csv(processed_path)
+    if processed_path not in _DATAFRAME_CACHE:
+        _DATAFRAME_CACHE[processed_path] = pd.read_csv(processed_path)
+    df = _DATAFRAME_CACHE[processed_path]
 
-    device_df = df[df["device"] == device_id].reset_index(drop=True)
-    if device_df.empty:
-        raise ValueError(f"No data found for device: {device_id}")
+    cache_key = (processed_path, device_id, test_split_mode)
+    cached = _DEVICE_CACHE.get(cache_key)
+    if cached is None:
+        device_df = df[df["device"] == device_id].reset_index(drop=True)
+        if device_df.empty:
+            raise ValueError(f"No data found for device: {device_id}")
 
-    # Data is already sorted by timestamp from preprocess.py
-    X_all = device_df[FEATURE_COLS].values.astype(np.float32)
-    y_all = device_df[LABEL_COL].values.astype(np.int64)
-    n     = len(X_all)
-
-    # ── Fixed test set (last test_split of all data) ───────────────────────
-    test_start = int(n * (1 - test_split))
-    X_test     = X_all[test_start:]
-    y_test     = y_all[test_start:]
+        # Data is already sorted by timestamp from preprocess.py
+        X_all = device_df[FEATURE_COLS].values.astype(np.float32)
+        y_all = device_df[LABEL_COL].values.astype(np.int64)
+        n = len(X_all)
+        if test_split_mode == "stratified":
+            X_train_full, X_test, y_train_full, y_test = train_test_split(
+                X_all,
+                y_all,
+                test_size=test_split,
+                random_state=cfg["system"].get("seed", 42),
+                stratify=y_all,
+            )
+            X_all = X_train_full
+            y_all = y_train_full
+            test_start = len(X_all)
+        else:
+            test_start = int(n * (1 - test_split))
+            X_test = X_all[test_start:]
+            y_test = y_all[test_start:]
+        _DEVICE_CACHE[cache_key] = (X_all, y_all, test_start, X_test, y_test)
+    else:
+        X_all, y_all, test_start, X_test, y_test = cached
 
     # ── Training window selection ─────────────────────────────────────────
     train_end_idx = test_start   # training data is everything before test set
@@ -140,7 +163,10 @@ def get_edge_partition(
 
     # Optional cap to keep per-round compute bounded and comparable.
     # This helps reduce latency/energy without changing test-set evaluation.
-    max_train = int(cfg["system"].get("max_train_samples_per_round", 0) or 0)
+    if max_train_samples_override is not None:
+        max_train = int(max_train_samples_override)
+    else:
+        max_train = int(cfg["system"].get("max_train_samples_per_round", 0) or 0)
     if max_train > 0 and len(X_train) > max_train:
         # Stratified downsampling preserves class proportions better than uniform sampling.
         rng = np.random.default_rng(cfg["system"].get("seed", 42) + round_num)

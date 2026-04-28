@@ -5,7 +5,7 @@ from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
-import joblib
+import json
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
@@ -17,6 +17,8 @@ CANONICAL_DATA_DIR = ROOT_DIR / "main" / "data" / "processed"
 BASELINE_DATA_PATH = CANONICAL_DATA_DIR / "processed.csv"
 CANONICAL_SCALER_PATH = CANONICAL_DATA_DIR / "scaler.pkl"
 CANONICAL_RAW_PATH = ROOT_DIR / "main" / "data" / "iot_telemetry_data.csv"
+BASELINE_META_PATH = CANONICAL_DATA_DIR / "baseline_meta.json"
+BASELINE_DATA_VERSION = "v3_train_only_scaling_temporal_split"
 
 
 def create_labels(df: pd.DataFrame) -> pd.Series:
@@ -29,8 +31,14 @@ def create_labels(df: pd.DataFrame) -> pd.Series:
 
 def ensure_baseline_data(force: bool = False) -> Path:
     CANONICAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if BASELINE_DATA_PATH.exists() and not force:
-        return BASELINE_DATA_PATH
+    if BASELINE_DATA_PATH.exists() and not force and BASELINE_META_PATH.exists():
+        try:
+            meta = json.loads(BASELINE_META_PATH.read_text(encoding="utf-8"))
+            if meta.get("version") == BASELINE_DATA_VERSION:
+                return BASELINE_DATA_PATH
+        except Exception:
+            # If metadata is corrupted, regenerate to ensure fair preprocessing.
+            pass
 
     if not CANONICAL_RAW_PATH.exists():
         raise FileNotFoundError(f"Canonical raw IoT dataset not found: {CANONICAL_RAW_PATH}")
@@ -39,10 +47,18 @@ def ensure_baseline_data(force: bool = False) -> Path:
     df["light"] = df["light"].astype(int)
     df["motion"] = df["motion"].astype(int)
     df[LABEL_COL] = create_labels(df)
-    scaler = StandardScaler()
-    df[FEATURE_COLS] = scaler.fit_transform(df[FEATURE_COLS])
-    df[[*FEATURE_COLS, LABEL_COL]].to_csv(BASELINE_DATA_PATH, index=False)
-    joblib.dump(scaler, CANONICAL_SCALER_PATH)
+    # Keep canonical baseline data unscaled to avoid train-test leakage.
+    # Scaling is applied in load_baseline_split() with train-only fit.
+    keep_cols = [*FEATURE_COLS, LABEL_COL]
+    if "ts" in df.columns:
+        keep_cols.append("ts")
+    if "device" in df.columns:
+        keep_cols.append("device")
+    df[keep_cols].to_csv(BASELINE_DATA_PATH, index=False)
+    BASELINE_META_PATH.write_text(
+        json.dumps({"version": BASELINE_DATA_VERSION}, indent=2),
+        encoding="utf-8",
+    )
     return BASELINE_DATA_PATH
 
 
@@ -52,9 +68,26 @@ def load_baseline_dataframe() -> pd.DataFrame:
 
 def load_baseline_split(test_size: float = 0.2, seed: int = 42) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     df = load_baseline_dataframe()
-    X = df[FEATURE_COLS].to_numpy(dtype=np.float32)
-    y = df[LABEL_COL].to_numpy(dtype=np.int64)
-    return train_test_split(X, y, test_size=test_size, random_state=seed, stratify=y)
+    if "ts" in df.columns:
+        # Harder and more realistic evaluation: train on earlier data, test on later data.
+        df = df.sort_values("ts").reset_index(drop=True)
+        split_idx = int(len(df) * (1 - test_size))
+        train_df = df.iloc[:split_idx]
+        test_df = df.iloc[split_idx:]
+        X_train = train_df[FEATURE_COLS].to_numpy(dtype=np.float32)
+        y_train = train_df[LABEL_COL].to_numpy(dtype=np.int64)
+        X_test = test_df[FEATURE_COLS].to_numpy(dtype=np.float32)
+        y_test = test_df[LABEL_COL].to_numpy(dtype=np.int64)
+    else:
+        X = df[FEATURE_COLS].to_numpy(dtype=np.float32)
+        y = df[LABEL_COL].to_numpy(dtype=np.int64)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=seed, stratify=y
+        )
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train).astype(np.float32)
+    X_test = scaler.transform(X_test).astype(np.float32)
+    return X_train, X_test, y_train, y_test
 
 
 def split_non_iid(X: np.ndarray, y: np.ndarray, n_clients: int = 4, seed: int = 42) -> List[Tuple[np.ndarray, np.ndarray]]:

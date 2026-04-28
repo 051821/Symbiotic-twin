@@ -3,7 +3,8 @@ services:
   server:
     build:
       context: .
-      dockerfile: Dockerfile.server
+      dockerfile: Dockerfile.app
+      target: server
     container_name: symbiotic-server
     ports:
       - "18000:8000"
@@ -25,7 +26,9 @@ services:
   edge1:
     build:
       context: .
-      dockerfile: Dockerfile.edge
+      dockerfile: Dockerfile.app
+      target: edge
+    image: symbiotic-edge:latest
     container_name: symbiotic-edge1
     environment:
       - EDGE_ID=edge1
@@ -41,9 +44,7 @@ services:
     restart: "no"   # edges exit cleanly after all rounds — no infinite restart
 
   edge2:
-    build:
-      context: .
-      dockerfile: Dockerfile.edge
+    image: symbiotic-edge:latest
     container_name: symbiotic-edge2
     environment:
       - EDGE_ID=edge2
@@ -59,9 +60,7 @@ services:
     restart: "no"
 
   edge3:
-    build:
-      context: .
-      dockerfile: Dockerfile.edge
+    image: symbiotic-edge:latest
     container_name: symbiotic-edge3
     environment:
       - EDGE_ID=edge3
