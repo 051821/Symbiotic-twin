@@ -54,6 +54,9 @@ def run_edge(edge_id: str, device_id: str) -> None:
     cognitive = CognitiveLayer(edge_id, initial_lr=cfg["system"]["learning_rate"])
     base_max_train = int(cfg["system"].get("max_train_samples_per_round", 0) or 0)
     base_epochs = int(cfg["system"].get("epochs_per_round", 1) or 1)
+    eval_every_n_rounds = max(1, int(cfg["system"].get("eval_every_n_rounds", 1) or 1))
+    eval_max_samples = int(cfg["system"].get("eval_max_samples_per_round", 0) or 0)
+    last_test_acc = 0.0
 
     for round_num in range(1, num_rounds + 1):
         logger.info(f"--- Round {round_num}/{num_rounds} ---")
@@ -89,22 +92,39 @@ def run_edge(edge_id: str, device_id: str) -> None:
         if result is not None:
             global_weights, version = result
             model.load_state_dict(global_weights)
+            trainer.set_global_reference(global_weights)
             logger.info(f"Loaded global model v{version}")
+        else:
+            # Keep a local reference so FedProx stays well-defined in transient network gaps.
+            trainer.set_global_reference(model.state_dict())
 
         # ── Train on this round's window ───────────────────────────────────
         accuracy, latency_ms, energy_j = trainer.train(train_loader, epochs_override=round_epochs)
 
-        # ── Evaluate on fixed held-out test set ────────────────────────────
-        test_acc = trainer.evaluate(test_loader)
-        # Guard against pathological window/test mismatch: avoid collapsing to 0%
-        # by blending with train signal when eval is extremely low.
-        if test_acc < 5.0 and accuracy > 20.0:
-            logger.warning(
-                f"[{edge_id}] Very low eval accuracy ({test_acc:.2f}%) with "
-                f"reasonable train accuracy ({accuracy:.2f}%). Applying robust blend."
+        # ── Evaluate on fixed held-out test set (configurable cadence) ─────
+        should_eval = (
+            round_num == 1
+            or round_num == num_rounds
+            or (round_num % eval_every_n_rounds == 0)
+        )
+        if should_eval:
+            test_acc = trainer.evaluate(test_loader, max_samples=eval_max_samples)
+            # Guard against pathological window/test mismatch: avoid collapsing to 0%
+            # by blending with train signal when eval is extremely low.
+            if test_acc < 5.0 and accuracy > 20.0:
+                logger.warning(
+                    f"[{edge_id}] Very low eval accuracy ({test_acc:.2f}%) with "
+                    f"reasonable train accuracy ({accuracy:.2f}%). Applying robust blend."
+                )
+                test_acc = 0.7 * test_acc + 0.3 * accuracy
+            last_test_acc = test_acc
+            logger.info(f"[{edge_id}] Test accuracy: {test_acc:.2f}%")
+        else:
+            test_acc = last_test_acc if last_test_acc > 0 else accuracy
+            logger.info(
+                f"[{edge_id}] Skipping full eval this round "
+                f"(eval_every_n_rounds={eval_every_n_rounds}); using cached TestAcc={test_acc:.2f}%"
             )
-            test_acc = 0.7 * test_acc + 0.3 * accuracy
-        logger.info(f"[{edge_id}] Test accuracy: {test_acc:.2f}%")
 
         # ── Cognitive adaptation ───────────────────────────────────────────
         new_lr = cognitive.adapt(accuracy, energy_j)

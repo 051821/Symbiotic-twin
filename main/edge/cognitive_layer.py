@@ -5,6 +5,7 @@ based on accuracy history and energy budget.
 """
 
 from typing import List
+from config.loader import get_config
 from config.logging_config import setup_logger
 
 logger = setup_logger("cognitive")
@@ -12,12 +13,14 @@ logger = setup_logger("cognitive")
 
 class CognitiveLayer:
     def __init__(self, edge_id: str, initial_lr: float = 0.001, energy_budget_j: float = 10000.0):
+        cfg = get_config()
         self.edge_id       = edge_id
         self.lr            = initial_lr
         self.energy_budget = energy_budget_j
         self.energy_spent  = 0.0
         self.acc_history:  List[float] = []
         self.lr_history:   List[float] = []
+        self.allow_extra_epochs = bool(cfg["system"].get("allow_extra_epochs", False))
 
     def adapt(self, current_accuracy: float, energy_used_j: float) -> float:
         self.acc_history.append(current_accuracy)
@@ -68,7 +71,7 @@ class CognitiveLayer:
         # If the latest round dropped materially, train a bit harder next round.
         if drift > 1.5:
             sample_ratio = 1.0
-            extra_epochs = 1
+            extra_epochs = 1 if self.allow_extra_epochs else 0
         # Stable and strong accuracy -> trim compute budget.
         elif recent_last >= 86.0 and drift < 0.6:
             sample_ratio = 0.72

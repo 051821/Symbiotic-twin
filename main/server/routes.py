@@ -166,15 +166,32 @@ def classify_sensor(payload: ClassifyPayload):
     label_map = {0: "Normal", 1: "Warning", 2: "Critical"}
     label = label_map[pred]
 
+    smoke_or_co_alert = payload.smoke > 0.10 or payload.co > 0.005
+    lpg_alert = payload.lpg > 0.007
+    temp_alert = payload.temp > 90.0
+
     reasons = []
-    if payload.smoke > 0.10 or payload.co > 0.005:
-        reasons.append("High smoke/CO levels detected -> Fire risk")
-    if payload.lpg > 0.007:
-        reasons.append("Elevated LPG concentration -> Gas leak risk")
-    if payload.temp > 90.0:
-        reasons.append("Temperature exceeds 90F -> Environmental anomaly")
+    if smoke_or_co_alert:
+        reasons.append("Threshold rule triggered: high smoke/CO levels (fire risk).")
+    if lpg_alert:
+        reasons.append("Threshold rule triggered: elevated LPG concentration (gas leak risk).")
+    if temp_alert:
+        reasons.append("Threshold rule triggered: high temperature (>90F).")
+
+    # If no hard threshold is crossed, explain that this is model-pattern driven.
     if not reasons:
-        reasons.append("All sensor readings within safe thresholds")
+        top2 = sorted(
+            ((label_map[i], float(probs[i])) for i in range(len(probs))),
+            key=lambda x: x[1],
+            reverse=True,
+        )[:2]
+        primary_lbl, primary_p = top2[0]
+        secondary_lbl, secondary_p = top2[1]
+        reasons.append("No hard threshold rule triggered; prediction comes from learned multivariate pattern.")
+        reasons.append(
+            f"Model confidence: {primary_lbl} {primary_p * 100:.1f}% "
+            f"(next: {secondary_lbl} {secondary_p * 100:.1f}%)."
+        )
 
     return {
         "prediction": pred,

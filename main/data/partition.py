@@ -30,6 +30,41 @@ FEATURE_COLS = ["co", "humidity", "light", "lpg", "motion", "smoke", "temp"]
 LABEL_COL    = "label"
 _DATAFRAME_CACHE: Dict[Path, pd.DataFrame] = {}
 _DEVICE_CACHE: Dict[Tuple[Path, str, str], Tuple[np.ndarray, np.ndarray, int, np.ndarray, np.ndarray]] = {}
+_TEST_DATASET_CACHE: Dict[Tuple[Path, str, str], torch.utils.data.TensorDataset] = {}
+
+
+def _expand_window_for_class_diversity(
+    X_all: np.ndarray,
+    y_all: np.ndarray,
+    start_idx: int,
+    end_idx: int,
+    train_end_idx: int,
+    min_classes: int,
+) -> Tuple[np.ndarray, np.ndarray, int, int]:
+    """
+    Expand a sliding window until it contains at least `min_classes` labels.
+    Keeps temporal ordering and only expands bounds (does not shuffle).
+    """
+    left = max(0, start_idx)
+    right = min(train_end_idx, end_idx)
+    if right <= left:
+        return X_all[left:right], y_all[left:right], left, right
+
+    step = max(128, int(0.05 * train_end_idx))
+    for _ in range(12):
+        labels = np.unique(y_all[left:right])
+        if len(labels) >= min_classes:
+            break
+        grew = False
+        if left > 0:
+            left = max(0, left - step)
+            grew = True
+        if right < train_end_idx:
+            right = min(train_end_idx, right + step)
+            grew = True
+        if not grew:
+            break
+    return X_all[left:right], y_all[left:right], left, right
 
 
 def _compute_class_weights(y: np.ndarray) -> torch.Tensor:
@@ -155,6 +190,21 @@ def get_edge_partition(
 
         X_train = X_all[start_idx:end_idx]
         y_train = y_all[start_idx:end_idx]
+
+        min_classes = int(cfg["data"].get("min_classes_per_window", 2) or 2)
+        if len(np.unique(y_train)) < min_classes:
+            X_train, y_train, expanded_start, expanded_end = _expand_window_for_class_diversity(
+                X_all=X_all,
+                y_all=y_all,
+                start_idx=start_idx,
+                end_idx=end_idx,
+                train_end_idx=train_end_idx,
+                min_classes=min_classes,
+            )
+            logger.info(
+                f"[{device_id}] Sliding window expanded for class diversity "
+                f"→ [{expanded_start}, {expanded_end}] | classes={len(np.unique(y_train))}"
+            )
         logger.info(
             f"[{device_id}] Sliding window → [{start_idx}, {end_idx}] "
             f"({start_frac*100:.1f}%–{end_frac*100:.1f}%) | "
@@ -204,12 +254,18 @@ def get_edge_partition(
         f"Normal={class_weights[0]:.3f}, Warning={class_weights[1]:.3f}, Critical={class_weights[2]:.3f}"
     )
 
-    train_dataset = torch.utils.data.TensorDataset(
-        torch.tensor(X_train), torch.tensor(y_train)
-    )
-    test_dataset = torch.utils.data.TensorDataset(
-        torch.tensor(X_test), torch.tensor(y_test)
-    )
+    # Build train tensors with zero-copy path when possible.
+    X_train_t = torch.from_numpy(np.ascontiguousarray(X_train)).float()
+    y_train_t = torch.from_numpy(np.ascontiguousarray(y_train)).long()
+    train_dataset = torch.utils.data.TensorDataset(X_train_t, y_train_t)
+
+    # Test partition is fixed per device/split mode, so cache the tensor dataset once.
+    test_dataset = _TEST_DATASET_CACHE.get(cache_key)
+    if test_dataset is None:
+        X_test_t = torch.from_numpy(np.ascontiguousarray(X_test)).float()
+        y_test_t = torch.from_numpy(np.ascontiguousarray(y_test)).long()
+        test_dataset = torch.utils.data.TensorDataset(X_test_t, y_test_t)
+        _TEST_DATASET_CACHE[cache_key] = test_dataset
 
     logger.info(
         f"[{device_id}] Round {round_num} | "

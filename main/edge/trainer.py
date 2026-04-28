@@ -39,7 +39,9 @@ class LocalTrainer:
         self.weight_decay    = model_cfg.get("weight_decay", 1e-4)
         self.label_smoothing = model_cfg.get("label_smoothing", 0.0)
         self.grad_clip_norm  = model_cfg.get("grad_clip_norm", 0.0)
+        self.fedprox_mu      = float(model_cfg.get("fedprox_mu", 0.0) or 0.0)
         self.device  = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._global_reference = None
 
         self.model.to(self.device)
 
@@ -58,6 +60,16 @@ class LocalTrainer:
         )
         self._use_amp = self.device.type == "cuda"
         self._scaler = torch.cuda.amp.GradScaler(enabled=self._use_amp)
+
+    def set_global_reference(self, state_dict: dict) -> None:
+        """
+        Store a detached snapshot of global parameters for FedProx.
+        Called once per round after syncing with the latest global model.
+        """
+        self._global_reference = {
+            name: param.detach().to(self.device)
+            for name, param in state_dict.items()
+        }
 
     def update_class_weights(self, class_weights: torch.Tensor) -> None:
         """Update loss weights when the window shifts to a new data slice."""
@@ -88,9 +100,23 @@ class LocalTrainer:
                             with torch.autocast(device_type="cuda", dtype=torch.float16):
                                 outputs = self.model(X_batch)
                                 loss = self.criterion(outputs, y_batch)
+                                if self.fedprox_mu > 0.0 and self._global_reference is not None:
+                                    prox_term = 0.0
+                                    for name, param in self.model.named_parameters():
+                                        g_ref = self._global_reference.get(name)
+                                        if g_ref is not None:
+                                            prox_term = prox_term + torch.sum((param - g_ref) ** 2)
+                                    loss = loss + 0.5 * self.fedprox_mu * prox_term
                         else:
                             outputs = self.model(X_batch)
                             loss = self.criterion(outputs, y_batch)
+                            if self.fedprox_mu > 0.0 and self._global_reference is not None:
+                                prox_term = 0.0
+                                for name, param in self.model.named_parameters():
+                                    g_ref = self._global_reference.get(name)
+                                    if g_ref is not None:
+                                        prox_term = prox_term + torch.sum((param - g_ref) ** 2)
+                                loss = loss + 0.5 * self.fedprox_mu * prox_term
                         if self._use_amp:
                             self._scaler.scale(loss).backward()
                             if self.grad_clip_norm and self.grad_clip_norm > 0:
@@ -126,11 +152,12 @@ class LocalTrainer:
         )
         return accuracy, latency_ms, energy_j
 
-    def evaluate(self, test_loader: DataLoader) -> float:
-        """Evaluate model on the fixed held-out test set. Returns accuracy %."""
+    def evaluate(self, test_loader: DataLoader, max_samples: Optional[int] = None) -> float:
+        """Evaluate model on held-out test set (optionally capped). Returns accuracy %."""
         self.model.eval()
         correct, total = 0, 0
-        with torch.no_grad():
+        max_samples = int(max_samples or 0)
+        with torch.inference_mode():
             for X_batch, y_batch in test_loader:
                 X_batch = X_batch.to(self.device, non_blocking=True)
                 y_batch = y_batch.to(self.device, non_blocking=True)
@@ -138,6 +165,8 @@ class LocalTrainer:
                 c, t    = compute_batch_accuracy(outputs, y_batch)
                 correct += c
                 total   += t
+                if max_samples > 0 and total >= max_samples:
+                    break
         acc = correct / total * 100 if total else 0
         logger.info(f"[{self.edge_id}] Test Accuracy: {acc:.2f}%")
         return acc

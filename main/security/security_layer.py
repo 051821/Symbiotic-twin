@@ -7,6 +7,7 @@ import hashlib, hmac, json, time, base64, secrets, numpy as np
 from typing import Dict, Any, Optional, Tuple, List
 from collections import defaultdict
 from config.logging_config import setup_logger
+from config.loader import get_config
 
 logger = setup_logger("security")
 
@@ -131,7 +132,12 @@ def get_detector() -> PoisoningDetector:
 def get_rate_limiter() -> RateLimiter:
     global _rate_limiter
     if _rate_limiter is None:
-        _rate_limiter = RateLimiter()
+        cfg = get_config()
+        sec_cfg = cfg.get("security", {})
+        _rate_limiter = RateLimiter(
+            max_per_window=int(sec_cfg.get("rate_limit_max_per_window", 30)),
+            window_seconds=int(sec_cfg.get("rate_limit_window_seconds", 60)),
+        )
     return _rate_limiter
 
 

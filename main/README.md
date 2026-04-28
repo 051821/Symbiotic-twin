@@ -1,75 +1,119 @@
 # SYMBIOTIC-TWIN (Main Project)
 
-Secure, multi-agent federated learning for IoT digital twins with edge privacy, adaptive aggregation, and live operational monitoring.
+Secure multi-agent federated learning for IoT digital twins with privacy-preserving edge training, adaptive aggregation, security hardening, and live operational dashboards.
 
-## What this project does
+## Core Features
 
-- Trains one shared model across multiple IoT edges without moving raw sensor data to the server.
-- Keeps advanced features enabled: temporal windowing, class-imbalance handling, security checks, reputation scoring, and multi-agent analysis.
-- Produces round-wise metrics used for cross-model comparison with centralized and FedAvg baselines.
+- **Federated learning across 3 edge nodes** with a shared global model.
+- **No raw data upload**: only model updates are sent to server.
+- **Non-IID data support** by per-device partitioning.
+- **Temporal windowing modes**: `sliding`, `expanding`, `full`.
+- **Class-imbalance handling** using class-weighted cross-entropy.
+- **FedProx stabilization** to reduce edge divergence in non-IID rounds.
+- **Adaptive weighting + reputation** in aggregation.
+- **Security layer** with HMAC verification, rate limiting, and poisoning outlier detection.
+- **Multi-agent analysis panel** (analyst, anomaly, predictor, security agents).
+- **Live IoT classifier UI** with confidence and explanation output.
+- **Round-wise metrics tracking**: accuracy, latency, energy, aggregation weights, reputation.
 
-## Architecture overview
+## Architecture
 
-- `edge/` handles local training, evaluation, and update submission.
-- `server/` handles validation, aggregation, reputation, model versioning, and APIs.
-- `agents/` runs analytical agents per round.
-- `security/` runs poisoning/rate-limit/signature checks.
-- `metrics/` records `global_acc`, edge latency, edge energy, and aggregation weights into `logs/metrics.json`.
-- `dashboard/` renders real-time and historical federated performance.
+- `edge/`: edge runtime (load windowed data, local train/eval, send update).
+- `server/`: APIs, update intake, aggregation, reputation, model versioning.
+- `data/`: preprocessing and partitioning logic.
+- `security/`: signature/rate-limit/poisoning safeguards.
+- `agents/`: round-level multi-agent insights.
+- `metrics/`: writes `logs/metrics.json`.
+- `dashboard/`: Streamlit monitoring and live classification app.
 
-## Performance optimization status
+## Training And Optimization Features
 
-The latest tuning keeps model behavior/features intact while reducing overhead:
+- AMP training on CUDA when available.
+- Efficient optimizer flow (`zero_grad(set_to_none=True)`, optional grad clipping).
+- Data and device partition caching to reduce repeated preprocessing cost.
+- Configurable per-round sample cap (`max_train_samples_per_round`) for latency/energy control.
+- Configurable eval cadence (`eval_every_n_rounds`) to reduce overhead in fast mode.
+- FedProx configurable via `model.fedprox_mu`.
+- Cognitive layer adapts sample ratio, epochs, and learning rate based on performance/energy.
 
-- Cached processed dataframe and per-device partitions to avoid repeated disk and filter work each round.
-- Removed duplicate partition calls per round on edges.
-- Improved local training efficiency (`zero_grad(set_to_none=True)`, non-blocking transfer, CUDA autocast path).
-- Config tuning for lower cost per round:
-  - `batch_size: 384`
-  - `max_train_samples_per_round: 8000`
-  - `dataloader_workers: 0` (reduces multiprocessing overhead on Windows environments)
+## Profiles (Paper vs Fast)
 
-## Fair comparison protocol
+Use `config/config.yaml -> system.profile`:
 
-Use this protocol before claiming model ranking:
+- `paper`: prioritize strict per-round evaluation and reproducibility.
+- `fast`: prioritize lower latency/energy with efficient defaults.
 
-1. Same dataset and test split for all models.
-2. Same round/epoch budget (`main/config/config.yaml -> system.num_rounds`).
-3. Same energy formula (`energy_j = power_w * elapsed_time_s`) across all models.
-4. Compare over common round budget (minimum shared rounds across metrics files).
-5. Use balanced score from normalized accuracy, inverted latency, and inverted energy.
+Current fast-oriented defaults:
 
-## Run order for fair results
+- `batch_size: 512`
+- `max_train_samples_per_round: 4096`
+- `eval_every_n_rounds: 2`
+- `learning_rate: 0.0008`
+- `model.fedprox_mu: 0.0005`
 
-1. Run centralized baseline (`Centrelized symbiotic twin/main.py`).
-2. Run FedAvg baseline (`fedavg_project/fedavg_model.py`).
-3. Run SYMBIOTIC-TWIN stack (`main/server` + all edges).
-4. Open comparison dashboard (`comparison_dashboard.py` via Streamlit).
+If you need exact paper-style behavior, set:
 
-## Reliable Docker build (Windows)
+- `eval_every_n_rounds: 1`
+- increase `max_train_samples_per_round` to your reported value
+- keep any hyperparameters exactly as used in your experiments
 
-If Docker builds fail due to low disk or take too long, use:
+## Live Classifier Behavior
+
+- `/classify` returns model prediction (`Normal/Warning/Critical`) plus probabilities.
+- Explanation text now distinguishes:
+  - **Threshold-triggered reasons** (hard rules exceeded), and
+  - **Model-pattern reasons** (no hard rule exceeded, but model predicts risk from combined features).
+
+This prevents contradictory output such as "Critical" with "all thresholds safe" explanation.
+
+## Security Features
+
+- HMAC signature verification for update payloads.
+- Replay/time-window checks (via timestamp in payload).
+- Per-edge rate limiting.
+- Weight-norm outlier detection for poisoning attempts.
+- Reputation penalty/exclusion behavior for suspicious edges.
+
+## Metrics Captured Per Round
+
+- Global weighted accuracy.
+- Per-edge accuracy.
+- Per-edge training latency (ms).
+- Per-edge energy estimate (J).
+- Aggregation weights.
+- Reputation history.
+
+## Docker Build And Runtime
+
+Recommended:
+
+- `docker compose build --parallel`
+- `docker compose up -d`
+
+APT and pip cache mounts are configured with locked sharing for stable concurrent builds.
+
+Windows helper script:
 
 - `powershell -ExecutionPolicy Bypass -File build-and-run.ps1`
 
-What it does:
+## Important Files
 
-- checks Docker availability
-- checks free space on `C:`
-- aborts early with cleanup commands if space is too low
-- runs `docker compose build` then `docker compose up -d`
+- `config/config.yaml`: all training/system knobs
+- `edge/main.py`: federated round loop and adaptive plan
+- `edge/trainer.py`: local training, FedProx, evaluation
+- `data/partition.py`: non-IID + temporal partitioning
+- `server/routes.py`: API endpoints including `/update` and `/classify`
+- `server/aggregator.py`: FedAvg/adaptive aggregation math
+- `server/reputation.py`: reputation update logic
+- `metrics/tracker.py`: metrics persistence
+- `dashboard/app.py`: UI tabs for classifier, metrics, agents, security, windows
 
-## Key files
+## Fair Comparison Protocol
 
-- Config: `config/config.yaml`
-- Edge loop: `edge/main.py`
-- Trainer: `edge/trainer.py`
-- Partitioning: `data/partition.py`
-- Aggregation API: `server/routes.py`
-- Aggregation math: `server/aggregator.py`
-- Metrics persistence: `metrics/tracker.py`
-- Dashboard: `dashboard/app.py`
+For model comparisons (centralized vs FedAvg vs SYMBIOTIC-TWIN):
 
-## Goal of this main model
-
-SYMBIOTIC-TWIN is intended to win under a **balanced** metric (accuracy + efficiency), not only raw accuracy. The optimization and fairness updates in this repo are designed to support that outcome.
+1. Keep same dataset and same test split.
+2. Keep same total round/epoch budget.
+3. Keep same energy equation across systems.
+4. Compare over common rounds only.
+5. Report balanced score (accuracy + latency + energy), not accuracy alone.

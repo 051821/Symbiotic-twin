@@ -1,11 +1,15 @@
 system:
+  profile: "fast"  # fast | paper
   num_edges: 3
   num_rounds: 10
-  learning_rate: 0.001
-  batch_size: 768
+  learning_rate: 0.0008
+  batch_size: 512
   epochs_per_round: 1
-  max_train_samples_per_round: 7500
-  dataloader_workers: 0
+  max_train_samples_per_round: 3072
+  eval_every_n_rounds: 1
+  eval_max_samples_per_round: 4096
+  allow_extra_epochs: false
+  dataloader_workers: 2
   seed: 42
 
 server:
@@ -34,23 +38,32 @@ model:
   weight_decay: 0.0001
   label_smoothing: 0.02
   grad_clip_norm: 1.0
+  fedprox_mu: 0.0005
 
 aggregation:
   strategy: "fedavg"
   adaptive_weighting: true
   reputation_enabled: true
   min_reputation: 0.1
+  reputation_similarity_weight: 0.25
 
 data:
   raw_path: "data/iot_telemetry_data.csv"
   processed_path: "data/processed/"
   partitions_path: "data/partitions/"
   test_split: 0.2
-  test_split_mode: "stratified"  # temporal | stratified
+  test_split_mode: "temporal"  # temporal | stratified
   # Temporal sliding window — each round trains on a fresh time slice
-  window_strategy: "full"      # sliding | expanding | full
+  window_strategy: "sliding"      # sliding | expanding | full
   window_fraction: 0.22
   window_step: 0.06
+  min_classes_per_window: 2
+
+security:
+  rate_limit_max_per_window: 30
+  rate_limit_window_seconds: 60
+  update_max_retries: 4
+  update_retry_backoff_seconds: 1.0
 
 logging:
   level: "INFO"

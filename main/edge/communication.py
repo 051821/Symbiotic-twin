@@ -5,6 +5,7 @@ HTTP communication layer between edge nodes and the federated server.
 
 import requests
 import torch
+import time
 from typing import Dict, Optional, Tuple
 
 from config.loader import get_config
@@ -31,6 +32,10 @@ def send_update(
     timeout:      int   = 30,
 ) -> bool:
     url     = f"{_server_url()}/update"
+    cfg = get_config()
+    comm_cfg = cfg.get("security", {})
+    max_retries = int(comm_cfg.get("update_max_retries", 4))
+    retry_backoff_s = float(comm_cfg.get("update_retry_backoff_seconds", 1.0))
     payload = {
         "edge_id":      edge_id,
         "weights":      serialize_weights(weights),
@@ -43,14 +48,32 @@ def send_update(
         "signature":    "",
         "timestamp":    0,
     }
-    try:
-        response = requests.post(url, json=payload, timeout=timeout)
-        response.raise_for_status()
-        logger.info(f"[{edge_id}] Update sent → {response.json()}")
-        return True
-    except requests.exceptions.RequestException as e:
-        logger.error(f"[{edge_id}] Failed to send update: {e}")
-        return False
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.post(url, json=payload, timeout=timeout)
+            if response.status_code == 429 and attempt < max_retries:
+                wait_s = retry_backoff_s * (2 ** attempt)
+                logger.warning(
+                    f"[{edge_id}] Update rate-limited (429). "
+                    f"Retrying in {wait_s:.1f}s (attempt {attempt + 1}/{max_retries})."
+                )
+                time.sleep(wait_s)
+                continue
+            response.raise_for_status()
+            logger.info(f"[{edge_id}] Update sent → {response.json()}")
+            return True
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries:
+                wait_s = retry_backoff_s * (2 ** attempt)
+                logger.warning(
+                    f"[{edge_id}] Update send failed ({e}). "
+                    f"Retrying in {wait_s:.1f}s (attempt {attempt + 1}/{max_retries})."
+                )
+                time.sleep(wait_s)
+                continue
+            logger.error(f"[{edge_id}] Failed to send update after retries: {e}")
+            return False
+    return False
 
 
 def fetch_global_model(timeout: int = 30) -> Optional[Tuple[Dict[str, torch.Tensor], int]]:

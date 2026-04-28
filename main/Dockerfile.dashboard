@@ -2,18 +2,21 @@
 FROM python:3.10-slim AS builder
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PIP_DISABLE_PIP_VERSION_CHECK=1
-RUN --mount=type=cache,target=/var/cache/apt \
+RUN --mount=type=cache,target=/var/cache/apt,id=apt-cache,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,id=apt-lists,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/* && \
     python -m pip install --upgrade pip setuptools wheel
 COPY requirements-dashboard.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
+RUN --mount=type=cache,target=/root/.cache/pip,id=pip-cache,sharing=locked \
     pip install --retries 10 --default-timeout=120 -r requirements-dashboard.txt
 
 FROM python:3.10-slim
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 STREAMLIT_SERVER_HEADLESS=true
-RUN apt-get update && \
+RUN --mount=type=cache,target=/var/cache/apt,id=apt-cache,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,id=apt-lists,sharing=locked \
+    apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
