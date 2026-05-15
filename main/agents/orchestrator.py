@@ -113,6 +113,13 @@ class AnomalyAgent(BaseAgent):
         alerts, findings = [], {"anomalies_detected": 0, "breakdown": {}}
         counts = {"fire_risk": 0, "gas_leak": 0, "temp_spike": 0}
 
+        if not sensor_batch:
+            findings["breakdown"] = counts
+            findings["batch_size"] = 0
+            self.anomaly_history.append({"round": round_num, **counts})
+            return AgentResult(agent_name=self.name, round_num=round_num,
+                               status=AgentStatus.DONE, findings=findings, alerts=[])
+
         for r in sensor_batch:
             if r.get("smoke", 0) > self.THRESHOLDS["smoke_critical"] or \
                r.get("co",    0) > self.THRESHOLDS["co_critical"]:
@@ -172,8 +179,12 @@ class PredictorAgent(BaseAgent):
         findings["edge_forecasts"] = ef
 
         if ef:
-            findings["predicted_best_edge"]  = max(ef, key=ef.get)
-            findings["predicted_worst_edge"] = min(ef, key=ef.get)
+            vals = list(ef.values())
+            if max(vals) - min(vals) > 0.01:
+                findings["predicted_best_edge"]  = max(ef, key=ef.get)
+                findings["predicted_worst_edge"] = min(ef, key=ef.get)
+            else:
+                findings["forecast_tie"] = True
 
         return AgentResult(agent_name=self.name, round_num=round_num,
                            status=AgentStatus.DONE, findings=findings, alerts=alerts)

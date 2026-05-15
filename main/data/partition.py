@@ -74,13 +74,19 @@ def _compute_class_weights(y: np.ndarray) -> torch.Tensor:
     from ignoring Warning / Critical classes.
     """
     classes, counts = np.unique(y, return_counts=True)
+    cfg = get_config()
     total = len(y)
     weights = np.ones(3, dtype=np.float32)
     for cls, cnt in zip(classes, counts):
-        weights[int(cls)] = total / (len(classes) * max(cnt, 1))
+        raw_weight = total / (len(classes) * max(cnt, 1))
+        weights[int(cls)] = np.sqrt(raw_weight)
 
-    # Prevent extreme instability when a class is nearly absent in a window.
-    weights = np.clip(weights, 0.25, 8.0)
+    multipliers = cfg["data"].get("class_weight_multipliers", [1.0, 1.0, 1.0])
+    if multipliers:
+        weights *= np.array(multipliers[:3], dtype=np.float32)
+
+    # Prevent instability when sampling has already boosted rare classes.
+    weights = np.clip(weights, 0.5, 5.0)
     return torch.tensor(weights, dtype=torch.float32)
 
 
@@ -213,39 +219,104 @@ def get_edge_partition(
 
     # Optional cap to keep per-round compute bounded and comparable.
     # This helps reduce latency/energy without changing test-set evaluation.
+    calibration_n = int(cfg["data"].get("calibration_samples_per_class", 0) or 0)
+    if calibration_n > 0:
+        rng = np.random.default_rng(cfg["system"].get("seed", 42) + 10_000 + round_num)
+        cal_X = []
+        cal_y = []
+        for cls in range(3):
+            cls_df = df[df[LABEL_COL] == cls]
+            if cls_df.empty:
+                continue
+            take_n = min(calibration_n, len(cls_df))
+            sample_df = cls_df.sample(
+                n=take_n,
+                replace=False,
+                random_state=cfg["system"].get("seed", 42) + round_num + cls,
+            )
+            cal_X.append(sample_df[FEATURE_COLS].values.astype(np.float32))
+            cal_y.append(sample_df[LABEL_COL].values.astype(np.int64))
+        if cal_X:
+            X_train = np.concatenate([X_train, *cal_X], axis=0)
+            y_train = np.concatenate([y_train, *cal_y], axis=0)
+            order = rng.permutation(len(y_train))
+            X_train = X_train[order]
+            y_train = y_train[order]
+            logger.info(
+                f"[{device_id}] Added calibration samples: "
+                f"{sum(len(y) for y in cal_y)} ({calibration_n}/class target)"
+            )
+
     if max_train_samples_override is not None:
         max_train = int(max_train_samples_override)
     else:
         max_train = int(cfg["system"].get("max_train_samples_per_round", 0) or 0)
     if max_train > 0 and len(X_train) > max_train:
-        # Stratified downsampling preserves class proportions better than uniform sampling.
+        # Preserve rare Warning/Critical examples inside the cap. This keeps
+        # latency bounded without letting majority Normal samples dominate.
         rng = np.random.default_rng(cfg["system"].get("seed", 42) + round_num)
         classes, counts = np.unique(y_train, return_counts=True)
+        min_per_class = int(cfg["data"].get("min_samples_per_class_cap", 0) or 0)
+        min_fraction = float(cfg["data"].get("class_balance_cap_fraction", 0.0) or 0.0)
+        balance_floor = max(min_per_class, int(round(max_train * min_fraction)))
+        oversample_rare = bool(cfg["data"].get("oversample_rare_classes", False))
         selected_idx = []
         total = len(y_train)
+        selected_real = set()
+        targets = {}
 
         for cls, cnt in zip(classes, counts):
+            targets[int(cls)] = max(balance_floor, int(round(max_train * (cnt / total))))
+
+        excess = sum(targets.values()) - max_train
+        if excess > 0:
+            for cls in sorted(targets, key=lambda c: targets[c], reverse=True):
+                if excess <= 0:
+                    break
+                reducible = max(0, targets[cls] - balance_floor)
+                cut = min(excess, reducible)
+                targets[cls] -= cut
+                excess -= cut
+        if excess > 0:
+            for cls in sorted(targets, key=lambda c: targets[c], reverse=True):
+                if excess <= 0:
+                    break
+                cut = min(excess, max(0, targets[cls] - 1))
+                targets[cls] -= cut
+                excess -= cut
+
+        for cls, _cnt in zip(classes, counts):
             cls_idx = np.where(y_train == cls)[0]
-            # Proportional budget with minimum floor for rare classes.
-            target = max(32, int(round(max_train * (cnt / total))))
-            target = min(target, len(cls_idx))
-            pick = rng.choice(cls_idx, size=target, replace=False)
+            target = min(targets[int(cls)], max_train)
+            replace = oversample_rare and len(cls_idx) < target
+            if not replace:
+                target = min(target, len(cls_idx))
+            pick = rng.choice(cls_idx, size=target, replace=replace)
             selected_idx.append(pick)
+            selected_real.update(int(i) for i in np.unique(pick))
 
         if selected_idx:
             idx = np.concatenate(selected_idx)
             if len(idx) > max_train:
                 idx = rng.choice(idx, size=max_train, replace=False)
             elif len(idx) < max_train:
-                remaining = np.setdiff1d(np.arange(len(y_train)), idx, assume_unique=False)
+                remaining = np.setdiff1d(
+                    np.arange(len(y_train)),
+                    np.fromiter(selected_real, dtype=np.int64),
+                    assume_unique=False,
+                )
                 if len(remaining) > 0:
                     add_n = min(max_train - len(idx), len(remaining))
                     add_idx = rng.choice(remaining, size=add_n, replace=False)
                     idx = np.concatenate([idx, add_idx])
 
+            rng.shuffle(idx)
             X_train = X_train[idx]
             y_train = y_train[idx]
-            logger.info(f"[{device_id}] Stratified cap applied: {len(X_train)} samples")
+            logger.info(
+                f"[{device_id}] Balanced cap applied: {len(X_train)} samples | "
+                f"floor={balance_floor} | oversample_rare={oversample_rare}"
+            )
 
     # ── Class weights to fix imbalance ────────────────────────────────────
     class_weights = _compute_class_weights(y_train)

@@ -23,6 +23,7 @@ class ReputationManager:
         cfg = get_config()
         self.min_score  = cfg["aggregation"].get("min_reputation", 0.1)
         self.similarity_weight = float(cfg["aggregation"].get("reputation_similarity_weight", 0.25))
+        self.ema_alpha = float(cfg["aggregation"].get("reputation_ema_alpha", 0.3))
         self.scores: Dict[str, float] = {}
         self.history: Dict[str, list] = defaultdict(list)
 
@@ -75,8 +76,8 @@ class ReputationManager:
         acc_w = 1.0 - sim_w
         quality = sim_w * similarity + acc_w * acc_factor
 
-        # Exponential moving average (α=0.3)
-        alpha = 0.3
+        # Exponential moving average.
+        alpha = min(1.0, max(0.05, self.ema_alpha))
         prev  = self.scores.get(edge_id, 1.0)
         new_score = alpha * quality + (1 - alpha) * prev
         new_score = max(self.min_score, new_score)

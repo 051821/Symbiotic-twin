@@ -19,6 +19,7 @@ from metrics.latency import LatencyTimer
 from metrics.energy import EnergyMonitor
 
 logger = setup_logger("trainer")
+torch.set_num_threads(2)
 
 
 class LocalTrainer:

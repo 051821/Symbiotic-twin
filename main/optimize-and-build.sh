@@ -4,7 +4,7 @@
 
 set -e
 
-PROJECT_ROOT="/Users/nitishkumar/Documents/Capstoneproject/Symbiotic-twin"
+PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_ROOT"
 
 echo "======================================================"

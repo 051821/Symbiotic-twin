@@ -270,6 +270,8 @@ def alert_html(alerts: list) -> str:
         return '<div class="alert-info">✅ No alerts this round — system nominal</div>'
     html = ""
     for a in alerts:
+        if not a:
+            continue
         cls = "alert-crit" if any(w in a for w in ["FIRE","CRITICAL","POISON","HMAC","🚨","🔐","🔑"]) \
               else "alert-warn" if any(w in a for w in ["⚠️","GAS","TEMP","📉","ℹ️"]) \
               else "alert-info"
@@ -707,7 +709,10 @@ with tabs[2]:
 
                     elif key == "anomaly" and findings:
                         total = findings.get("anomalies_detected",0)
-                        st.markdown(f"**Anomalies:** `{total}` / `{findings.get('batch_size','?')}` readings")
+                        batch_size = findings.get("batch_size", 0)
+                        st.markdown(f"**Anomalies:** `{total}` / `{batch_size}` readings")
+                        if batch_size == 0:
+                            st.caption("No live sensor batch was attached to this federated round.")
                         for k, v in findings.get("breakdown",{}).items():
                             ico = "🔥" if "fire" in k else ("⛽" if "gas" in k else "🌡️")
                             color = "#EF4444" if v > 0 else "#22C55E"
@@ -719,7 +724,9 @@ with tabs[2]:
                         for eid, p in findings.get("edge_forecasts",{}).items():
                             c = EDGE_COLORS.get(eid,"#aaa")
                             st.markdown(f"<span style='color:{c}'>● {eid}</span>: `{p:.1f}%`", unsafe_allow_html=True)
-                        if findings.get("predicted_best_edge"):
+                        if findings.get("forecast_tie"):
+                            st.markdown("🏆 Forecast tie: all edges are projected equally.")
+                        elif findings.get("predicted_best_edge"):
                             st.markdown(f"🏆 Best: **{findings['predicted_best_edge']}** | Worst: **{findings['predicted_worst_edge']}**")
 
                     elif key == "security" and findings:
@@ -732,6 +739,8 @@ with tabs[2]:
                         susp = findings.get("suspicious_edges",[])
                         if susp: st.markdown(f"⚠️ **Excluded from aggregation:** {', '.join(susp)}")
 
+                    if key == "anomaly" and findings.get("batch_size", 0) == 0:
+                        alerts = []
                     if alerts:
                         for a in alerts:
                             st.markdown(alert_html([a]), unsafe_allow_html=True)

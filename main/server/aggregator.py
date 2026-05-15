@@ -50,8 +50,10 @@ def compute_adaptive_weights(
         {edge_id: weight}  where weights sum to 1.0
     """
     total = sum(sample_counts.values())
+    cfg = get_config()
+    reputation_power = float(cfg["aggregation"].get("aggregation_reputation_power", 1.0) or 1.0)
     raw_scores = {
-        eid: (count / total) * reputations.get(eid, 1.0)
+        eid: (count / total) * (reputations.get(eid, 1.0) ** reputation_power)
         for eid, count in sample_counts.items()
     }
     score_sum = sum(raw_scores.values())

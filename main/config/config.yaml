@@ -2,14 +2,16 @@ system:
   profile: "fast"  # fast | paper
   num_edges: 3
   num_rounds: 10
-  learning_rate: 0.0008
+  learning_rate: 0.0004
   batch_size: 512
   epochs_per_round: 1
-  max_train_samples_per_round: 3072
+  max_train_samples_per_round: 4096
   eval_every_n_rounds: 1
-  eval_max_samples_per_round: 4096
+  eval_max_samples_per_round: 0
   allow_extra_epochs: false
-  dataloader_workers: 2
+  update_delivery_retries: 6
+  update_delivery_wait_seconds: 2.0
+  dataloader_workers: 0
   seed: 42
 
 server:
@@ -32,32 +34,44 @@ edges:
 
 model:
   input_size: 7
-  hidden_size: 80
+  hidden_size: 64
   num_classes: 3
-  dropout: 0.1
+  dropout: 0.05
   weight_decay: 0.0001
-  label_smoothing: 0.02
+  label_smoothing: 0.01
   grad_clip_norm: 1.0
   fedprox_mu: 0.0005
+  rule_prior_enabled: true
+  rule_prior_strength: 3.0
+  rule_prior_scaled_input: false
+  rule_prior_margins: [0.00003, 0.00003, 0.00003, 0.3]
 
 aggregation:
   strategy: "fedavg"
   adaptive_weighting: true
   reputation_enabled: true
   min_reputation: 0.1
-  reputation_similarity_weight: 0.25
+  reputation_similarity_weight: 0.2
+  reputation_ema_alpha: 0.3
+  aggregation_reputation_power: 0.75
 
 data:
   raw_path: "data/iot_telemetry_data.csv"
   processed_path: "data/processed/"
   partitions_path: "data/partitions/"
+  features_scaled: false
   test_split: 0.2
-  test_split_mode: "temporal"  # temporal | stratified
+  test_split_mode: "stratified"  # temporal | stratified
   # Temporal sliding window — each round trains on a fresh time slice
-  window_strategy: "sliding"      # sliding | expanding | full
-  window_fraction: 0.22
-  window_step: 0.06
+  window_strategy: "expanding"      # sliding | expanding | full
+  window_fraction: 0.45
+  window_step: 0.08
   min_classes_per_window: 2
+  min_samples_per_class_cap: 192
+  class_balance_cap_fraction: 0.1
+  oversample_rare_classes: false
+  calibration_samples_per_class: 384
+  class_weight_multipliers: [1.0, 1.05, 1.45]
 
 security:
   rate_limit_max_per_window: 30

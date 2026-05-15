@@ -74,8 +74,7 @@ get_version() {
 echo -e "${BLUE}Checking Files...${NC}\n"
 
 # Check main files exist
-check_file "Dockerfile.server" "Server Dockerfile"
-check_file "Dockerfile.edge" "Edge Dockerfile"
+check_file "Dockerfile.app" "App Dockerfile (multi-stage: server + edge)"
 check_file "Dockerfile.dashboard" "Dashboard Dockerfile"
 check_file "docker-compose.yml" "Docker Compose file"
 check_file "requirements-server.txt" "Server requirements"
@@ -85,8 +84,7 @@ check_file "requirements-dashboard.txt" "Dashboard requirements"
 echo ""
 echo -e "${BLUE}Checking Python Version (should be 3.10)...${NC}\n"
 
-check_content "Dockerfile.server" "python:3.10-slim" "Server uses Python 3.10"
-check_content "Dockerfile.edge" "python:3.10-slim" "Edge uses Python 3.10"
+check_content "Dockerfile.app" "python:3.10-slim" "App uses Python 3.10"
 check_content "Dockerfile.dashboard" "python:3.10-slim" "Dashboard uses Python 3.10"
 
 echo ""
@@ -136,17 +134,15 @@ check_content "requirements-dashboard.txt" "plotly==5.17.0" "  Plotly 5.17.0"
 echo ""
 echo -e "${BLUE}Checking Docker Best Practices...${NC}\n"
 
-check_content "Dockerfile.server" "PYTHONUNBUFFERED=1" "Server has PYTHONUNBUFFERED"
-check_content "Dockerfile.edge" "PYTHONUNBUFFERED=1" "Edge has PYTHONUNBUFFERED"
+check_content "Dockerfile.app" "PYTHONUNBUFFERED=1" "App has PYTHONUNBUFFERED"
 check_content "Dockerfile.dashboard" "PYTHONUNBUFFERED=1" "Dashboard has PYTHONUNBUFFERED"
 
-check_content "Dockerfile.server" "pip install --upgrade pip setuptools wheel" "Server upgrades pip/setuptools/wheel"
-check_content "Dockerfile.edge" "pip install --upgrade pip setuptools wheel" "Edge upgrades pip/setuptools/wheel"
+check_content "Dockerfile.app" "pip install --upgrade pip setuptools wheel" "App upgrades pip/setuptools/wheel"
 check_content "Dockerfile.dashboard" "pip install --upgrade pip setuptools wheel" "Dashboard upgrades pip/setuptools/wheel"
 
-check_content "Dockerfile.edge" "download.pytorch.org/whl/cpu" "Edge uses PyTorch CPU index"
+check_content "Dockerfile.app" "download.pytorch.org/whl/cpu" "Edge stage uses PyTorch CPU index"
 
-check_content "Dockerfile.server" "HEALTHCHECK" "Server has health check"
+check_content "Dockerfile.app" "HEALTHCHECK" "Server stage has health check"
 
 echo ""
 echo -e "${BLUE}Checking Docker Compose Configuration...${NC}\n"

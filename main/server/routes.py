@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import joblib
+import pandas as pd
 import torch
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -29,6 +30,8 @@ _model_manager: ModelManager | None = None
 _reputation: ReputationManager | None = None
 _pending_updates: Dict[str, dict] = {}
 _sample_counts: Dict[str, int] = {}
+_pending_round: int | None = None
+_latest_round_by_edge: Dict[str, int] = {}
 _expected_edges: int = 0
 _edge_tokens: Dict[str, str] = {}
 _security_log: List[Dict[str, Any]] = []
@@ -37,6 +40,7 @@ _scaler = None
 
 class UpdatePayload(BaseModel):
     edge_id: str
+    round_num: int = 0
     weights: Dict[str, Any]
     sample_count: int
     accuracy: float
@@ -97,11 +101,43 @@ def get_global_model():
 
 @router.post("/update")
 def receive_update(payload: UpdatePayload):
-    global _pending_updates, _sample_counts
+    global _pending_updates, _sample_counts, _pending_round
     if not _model_manager:
         raise HTTPException(status_code=503, detail="Server not initialised.")
 
     edge_id = payload.edge_id
+    round_num = int(payload.round_num or 0)
+
+    # Drop duplicate/stale updates from retries or delayed requests.
+    last_round = _latest_round_by_edge.get(edge_id, 0)
+    if round_num <= last_round:
+        logger.info(
+            f"Ignoring stale/duplicate update from {edge_id} "
+            f"(round={round_num}, last_seen={last_round})"
+        )
+        return {"status": "ignored", "reason": "stale_or_duplicate", "pending": len(_pending_updates)}
+
+    # Keep one coherent aggregation bucket per round.
+    if _pending_round is None:
+        _pending_round = round_num
+    elif round_num != _pending_round:
+        if round_num > _pending_round:
+            # Keep in-flight round intact; ask edge retries to continue later.
+            logger.info(
+                f"Ignoring future update from {edge_id} "
+                f"(round={round_num}, pending_round={_pending_round})"
+            )
+            return {
+                "status": "ignored",
+                "reason": "pending_round_in_progress",
+                "pending_round": _pending_round,
+                "pending": len(_pending_updates),
+            }
+        logger.info(
+            f"Ignoring out-of-sync update from {edge_id} "
+            f"(round={round_num}, pending_round={_pending_round})"
+        )
+        return {"status": "ignored", "reason": "out_of_sync_round", "pending": len(_pending_updates)}
 
     if not get_rate_limiter().allow(edge_id):
         _log_sec(edge_id, "RATE_LIMIT", "Too many updates")
@@ -121,6 +157,7 @@ def receive_update(payload: UpdatePayload):
     )
 
     _pending_updates[edge_id] = {
+        "round_num": round_num,
         "weights": deserialize_weights(payload.weights),
         "sample_count": payload.sample_count,
         "accuracy": effective_accuracy,
@@ -131,6 +168,7 @@ def receive_update(payload: UpdatePayload):
         "hmac_valid": hmac_valid,
     }
     _sample_counts[edge_id] = payload.sample_count
+    _latest_round_by_edge[edge_id] = round_num
 
     if len(_pending_updates) >= _expected_edges:
         _trigger_aggregation()
@@ -144,22 +182,27 @@ def classify_sensor(payload: ClassifyPayload):
     if not _model_manager:
         raise HTTPException(status_code=503, detail="Server not initialised.")
 
-    features = [[
-        payload.co,
-        payload.humidity,
-        payload.light,
-        payload.lpg,
-        payload.motion,
-        payload.smoke,
-        payload.temp,
-    ]]
-    scaler = _get_scaler()
-    scaled = torch.tensor(scaler.transform(features), dtype=torch.float32)
+    feature_columns = ["co", "humidity", "light", "lpg", "motion", "smoke", "temp"]
+    features = pd.DataFrame([{
+        "co": payload.co,
+        "humidity": payload.humidity,
+        "light": payload.light,
+        "lpg": payload.lpg,
+        "motion": payload.motion,
+        "smoke": payload.smoke,
+        "temp": payload.temp,
+    }], columns=feature_columns)
+    cfg = get_config()
+    if bool(cfg["data"].get("features_scaled", True)):
+        scaler = _get_scaler()
+        model_input = torch.tensor(scaler.transform(features), dtype=torch.float32)
+    else:
+        model_input = torch.tensor(features.values, dtype=torch.float32)
 
     model = _model_manager.model
     model.eval()
     with torch.no_grad():
-        logits = model(scaled)
+        logits = model(model_input)
         probs = torch.softmax(logits, dim=1).squeeze().tolist()
         pred = int(torch.argmax(logits, dim=1).item())
 
@@ -244,7 +287,7 @@ def _log_sec(edge_id, etype, detail):
 
 
 def _trigger_aggregation():
-    global _pending_updates
+    global _pending_updates, _pending_round
     logger.info(f"All {_expected_edges} edges submitted - aggregating...")
 
     local_weights = {eid: u["weights"] for eid, u in _pending_updates.items()}
@@ -332,3 +375,5 @@ def _trigger_aggregation():
 
     logger.info(f"Aggregation done. Global model v{round_num} | weighted_eval_acc={weighted_acc:.2f}%")
     _pending_updates.clear()
+    _sample_counts.clear()
+    _pending_round = None

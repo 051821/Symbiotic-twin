@@ -56,6 +56,8 @@ def run_edge(edge_id: str, device_id: str) -> None:
     base_epochs = int(cfg["system"].get("epochs_per_round", 1) or 1)
     eval_every_n_rounds = max(1, int(cfg["system"].get("eval_every_n_rounds", 1) or 1))
     eval_max_samples = int(cfg["system"].get("eval_max_samples_per_round", 0) or 0)
+    update_delivery_retries = max(1, int(cfg["system"].get("update_delivery_retries", 6) or 6))
+    update_delivery_wait_s = float(cfg["system"].get("update_delivery_wait_seconds", 2.0) or 2.0)
     last_test_acc = 0.0
 
     for round_num in range(1, num_rounds + 1):
@@ -132,16 +134,34 @@ def run_edge(edge_id: str, device_id: str) -> None:
             pg["lr"] = new_lr
 
         # ── Send update to server ──────────────────────────────────────────
-        send_update(
-            edge_id      = edge_id,
-            weights      = model.state_dict(),
-            sample_count = sample_count,
-            accuracy     = test_acc,
-            train_accuracy = accuracy,
-            test_accuracy  = test_acc,
-            latency_ms   = latency_ms,
-            energy_j     = energy_j,
-        )
+        delivered = False
+        for attempt in range(1, update_delivery_retries + 1):
+            delivered = send_update(
+                edge_id      = edge_id,
+                weights      = model.state_dict(),
+                round_num    = round_num,
+                sample_count = sample_count,
+                accuracy     = test_acc,
+                train_accuracy = accuracy,
+                test_accuracy  = test_acc,
+                latency_ms   = latency_ms,
+                energy_j     = energy_j,
+            )
+            if delivered:
+                break
+            logger.warning(
+                f"[{edge_id}] Update delivery failed for round {round_num}. "
+                f"Retrying in {update_delivery_wait_s:.1f}s "
+                f"({attempt}/{update_delivery_retries})"
+            )
+            time.sleep(update_delivery_wait_s)
+
+        if not delivered:
+            logger.error(
+                f"[{edge_id}] Could not deliver round {round_num} update after "
+                f"{update_delivery_retries} attempts. Stopping edge to avoid desynced rounds."
+            )
+            break
 
         logger.info(
             f"Round {round_num} complete | "

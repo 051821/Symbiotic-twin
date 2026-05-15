@@ -23,6 +23,7 @@ def _server_url() -> str:
 def send_update(
     edge_id:      str,
     weights:      Dict[str, torch.Tensor],
+    round_num:    int,
     sample_count: int,
     accuracy:     float,
     train_accuracy: float = 0.0,
@@ -38,6 +39,7 @@ def send_update(
     retry_backoff_s = float(comm_cfg.get("update_retry_backoff_seconds", 1.0))
     payload = {
         "edge_id":      edge_id,
+        "round_num":    int(round_num),
         "weights":      serialize_weights(weights),
         "sample_count": sample_count,
         "accuracy":     accuracy,
@@ -60,7 +62,17 @@ def send_update(
                 time.sleep(wait_s)
                 continue
             response.raise_for_status()
-            logger.info(f"[{edge_id}] Update sent → {response.json()}")
+            body = response.json()
+            if body.get("status") == "ignored" and body.get("reason") == "pending_round_in_progress" and attempt < max_retries:
+                wait_s = retry_backoff_s * (2 ** attempt)
+                logger.info(
+                    f"[{edge_id}] Server still finishing earlier round "
+                    f"(pending_round={body.get('pending_round')}). "
+                    f"Retrying update in {wait_s:.1f}s."
+                )
+                time.sleep(wait_s)
+                continue
+            logger.info(f"[{edge_id}] Update sent → {body}")
             return True
         except requests.exceptions.RequestException as e:
             if attempt < max_retries:
